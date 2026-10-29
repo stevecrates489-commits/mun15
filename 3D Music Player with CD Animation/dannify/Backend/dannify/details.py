@@ -1,0 +1,251 @@
+"""Fetch a saved song's details again, and keep the song exactly as it is.
+
+Title, artists, album, year, track number, genre and artwork come from
+YouTube Music for the recording the song was saved from (its video id), and
+are written back around the same audio: nothing is downloaded but the
+details and the picture, the file keeps its name and place, and it stays
+sealed. A song saved before its details were any good, or whose album has
+since been released properly, catches up without being downloaded again.
+"""
+
+from __future__ import annotations
+
+import shutil
+import tempfile
+import time
+from pathlib import Path
+from typing import Any, Optional
+
+from loguru import logger
+
+from . import vault
+
+UPDATED = 'updated'
+FAILED = 'failed'
+# Why, when it failed. The window says it in the user's language.
+NOT_FOUND = 'not_found'
+DAMAGED = 'damaged'
+OFFLINE = 'offline'
+
+
+def _song_from(head: dict[str, Any], path: Path) -> dict[str, Any]:
+    artists = head.get('artists')
+    if not isinstance(artists, list) or not artists:
+        artists = [head['artist']] if head.get('artist') else []
+    return {
+        'name': head.get('title') or path.stem,
+        'artists': [str(a) for a in artists if a],
+        'album_name': head.get('album') or '',
+        'duration': int(head.get('duration') or 0),
+    }
+
+
+def _fresh_details(song: dict[str, Any], video_id: str) -> tuple[Optional[dict[str, Any]], str]:
+    """The song as YouTube Music describes it now, and its video id."""
+
+    from . import providers  # noqa: PLC0415  (imports ytmusicapi)
+
+    exact = bool(video_id)
+    try:
+        if video_id:
+            match = providers.find_match_for_video(song, video_id)
+            # A song saved from a music video is not among the song results
+            # that search looks through, and its refresh always came back
+            # "no details found". The recording itself says what it is.
+            if match is None:
+                match = providers.watch_track(video_id)
+        else:
+            video_id, match = providers.find_match(song)
+    except Exception:
+        logger.opt(exception=True).debug('details lookup failed for {}', song.get('name'))
+        return None, ''
+    if not match or not video_id:
+        return None, video_id or ''
+    fresh = providers.enrich_from_match({**song, 'youtube_id': video_id}, match)
+    if exact and not fresh.get('album_name'):
+        fresh = _with_album(fresh, video_id)
+    credits = [
+        a for a in (match.get('artists') or [])
+        if isinstance(a, dict) and a.get('name')
+    ]
+    # Only for the very recording the song was saved from: a match found by
+    # searching may be somebody else's version.
+    if credits and exact and match.get('videoId') in (None, video_id):
+        # The recording's own credits, and who each artist is by id. A song
+        # saved with "Mbosso Ft Diamond Platnumz" as one name comes out of a
+        # refresh with two artists, each the right one online.
+        fresh['artists'] = [str(a['name']) for a in credits]
+        fresh['artist_ids'] = [
+            {'name': str(a['name']), 'id': str(a['id'])} for a in credits if a.get('id')
+        ]
+    return fresh, video_id
+
+
+def _with_album(song: dict[str, Any], video_id: str) -> dict[str, Any]:
+    """*song* with the album it is on, when the lookup that found it had none.
+
+    Songs saved one at a time before 4.9 lost their album on the way in, and
+    the search a refresh starts with often has nothing to say about it either.
+    The recording's own watch page usually does. A song saved from its music
+    video has no album even there, so the last word goes to the song results:
+    one with the same title by the same artist is that song as an album track,
+    and its album is the one this belongs on. Only the album is taken from it,
+    never the recording.
+    """
+
+    from . import providers  # noqa: PLC0415
+    from .repair import _confident, _norm  # noqa: PLC0415
+
+    try:
+        recording = providers.watch_track(video_id) or {}
+    except Exception:
+        logger.opt(exception=True).debug('album lookup failed for {}', song.get('name'))
+        return song
+    album = recording.get('album')
+    if not (isinstance(album, dict) and album.get('name')):
+        album = None
+        # What the recording calls itself ("Brighter Days (feat. Soweto
+        # Gospel Choir)") picks out the album track better than a title
+        # that was shortened when it was saved.
+        titles = [t for t in (recording.get('title'), song.get('name')) if t]
+        artists = ' '.join(song.get('artists') or [])
+        try:
+            results = providers._ytm().search(
+                f'{artists} {titles[0] if titles else ""}'.strip(), filter='songs', limit=10,
+            ) or []
+        except Exception:
+            logger.opt(exception=True).debug('album search failed for {}', song.get('name'))
+            results = []
+        named = [
+            r for r in results
+            if isinstance(r, dict) and isinstance(r.get('album'), dict) and r['album'].get('name')
+        ]
+        wanted = {_norm(t) for t in titles}
+        exact = [
+            r for r in named
+            if _norm(r.get('title')) in wanted and _confident({**song, 'name': r.get('title')}, r)
+        ]
+        close = [r for r in named if _confident(song, r)]
+        best = (exact or close or [None])[0]
+        album = best['album'] if best else None
+    if not album:
+        return song
+    out = {**song, 'album_name': str(album['name'])}
+    if album.get('id'):
+        out['album_id'] = str(album['id'])
+    return out
+
+
+def refresh(root: Path, path: Path, lyrics_providers: Optional[list[str]] = None) -> tuple[str, str]:
+    """Bring one saved song's details up to date. Returns ``(state, why)``."""
+
+    from . import downloader as dl  # noqa: PLC0415
+    from . import lyrics as lyrics_mod  # noqa: PLC0415
+
+    head, problem = vault.inspect(path)
+    if head is None or problem:
+        # A song that will not open is for a repair, which downloads it again.
+        return FAILED, DAMAGED
+    song = _song_from(head, path)
+    video_id = str(head.get('video_id') or '')
+    fresh, video_id = _fresh_details(song, video_id)
+    if fresh is None:
+        return FAILED, NOT_FOUND if _online() else OFFLINE
+
+    ext = str(head.get('ext') or '.m4a')
+    # The same bench a download uses, so a crash leaves nothing behind that
+    # the startup sweep does not clear.
+    from . import bench as _bench_mod  # noqa: PLC0415
+
+    bench = _bench_mod.make('dnf-dl-')
+    try:
+        plain = bench / f'song{ext}'
+        with open(plain, 'wb') as out:
+            for chunk in vault.open_range(path):
+                out.write(chunk)
+
+        if not fresh.get('genre'):
+            try:
+                genre = dl._fetch_itunes_genre(fresh)
+                if genre:
+                    fresh = {**fresh, 'genre': genre}
+            except Exception:
+                logger.opt(exception=True).debug('genre lookup failed')
+        dl.embed_metadata(plain, fresh)
+        dl.embed_video_id(plain, video_id)
+
+        # Lyrics too, when the song has none beside it yet.
+        lyric = path.with_suffix('.lrc')
+        if lyrics_providers and not lyric.exists():
+            try:
+                found = lyrics_mod.fetch(fresh, lyrics_providers)
+                if found is not None and found.has_any():
+                    dl.embed_lyrics(plain, found, write_sidecar=True)
+                    made = plain.with_suffix('.lrc')
+                    if made.is_file():
+                        shutil.move(str(made), str(lyric))
+            except Exception:
+                logger.opt(exception=True).debug('lyrics for {} not found', path.name)
+
+        meta = vault._tags_of(plain)
+        artists = fresh.get('artists') or []
+        for field, value in (
+            ('title', fresh.get('name') or ''),
+            ('artist', artists[0] if artists else ''),
+            ('album', fresh.get('album_name') or ''),
+            ('video_id', video_id),
+        ):
+            if value and not meta.get(field):
+                meta[field] = value
+        if artists:
+            meta['artists'] = list(artists)
+        ids = fresh.get('artist_ids') or head.get('artist_ids')
+        if ids:
+            meta['artist_ids'] = ids
+        album_id = fresh.get('album_id') or head.get('album_id')
+        if album_id:
+            meta['album_id'] = str(album_id)
+
+        # A song kept as something other than MP4 could not be retagged: its
+        # fresh details and artwork go straight into the header instead.
+        dl.header_details(plain, fresh, meta)
+
+        rebuilt = path.with_suffix(path.suffix + '.rebuilt')
+        vault.seal(plain, rebuilt, meta)  # seal() removes the plain copy
+        _swap(rebuilt, path)
+        try:
+            vault._note(root, path, meta)
+        except Exception:
+            logger.opt(exception=True).debug('could not note {}', path.name)
+        return UPDATED, ''
+    except Exception:
+        logger.opt(exception=True).warning('could not refresh the details of {}', path.name)
+        path.with_suffix(path.suffix + '.rebuilt').unlink(missing_ok=True)
+        path.with_suffix(path.suffix + '.rebuilt.part').unlink(missing_ok=True)
+        return FAILED, DAMAGED
+    finally:
+        shutil.rmtree(bench, ignore_errors=True)
+
+
+def _swap(fresh: Path, path: Path) -> None:
+    """Put the rebuilt song in place of the old one; retried while the old
+    one is being read for a moment (a cover being drawn, a scan)."""
+
+    for attempt in range(6):
+        try:
+            fresh.replace(path)
+            return
+        except PermissionError:
+            if attempt == 5:
+                raise
+            time.sleep(0.25 * (attempt + 1))
+
+
+def _online() -> bool:
+    import socket  # noqa: PLC0415
+
+    try:
+        with socket.create_connection(('music.youtube.com', 443), timeout=3):
+            return True
+    except OSError:
+        return False

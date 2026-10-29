@@ -1,0 +1,797 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300..700&family=JetBrains+Mono:wght@400;700&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* art is never a drag handle — the CD/chrome/cover PNGs must not lift into
+     a ghost drag on long-press (it also hijacked the window's file-drop
+     overlay). Text/images are not selectable chrome in this app. */
+  img {
+    -webkit-user-drag: none;
+    user-select: none;
+  }
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 240 10% 3.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 3.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 10% 3.9%;
+    --primary: 240 5.9% 10%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 240 4.8% 95.9%;
+    --secondary-foreground: 240 5.9% 10%;
+    --muted: 240 4.8% 95.9%;
+    --muted-foreground: 240 3.8% 46.1%;
+    --accent: 240 4.8% 95.9%;
+    --accent-foreground: 240 5.9% 10%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 5.9% 90%;
+    --input: 240 5.9% 90%;
+    --ring: 240 5.9% 10%;
+    --radius: 0.625rem;
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 240 5.3% 26.1%;
+    --sidebar-primary: 240 5.9% 10%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 240 4.8% 95.9%;
+    --sidebar-accent-foreground: 240 5.9% 10%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+
+  .dark {
+    --background: 240 10% 3.9%;
+    --foreground: 0 0% 98%;
+    --card: 240 10% 3.9%;
+    --card-foreground: 0 0% 98%;
+    --popover: 240 10% 3.9%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 240 5.9% 10%;
+    --secondary: 240 3.7% 15.9%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 240 3.7% 15.9%;
+    --muted-foreground: 240 5% 64.9%;
+    --accent: 240 3.7% 15.9%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 3.7% 15.9%;
+    --input: 240 3.7% 15.9%;
+    --ring: 240 4.9% 83.9%;
+    --sidebar-background: 240 5.9% 10%;
+    --sidebar-foreground: 240 4.8% 95.9%;
+    --sidebar-primary: 224.3 76.3% 48%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 240 3.7% 15.9%;
+    --sidebar-accent-foreground: 240 4.8% 95.9%;
+    --sidebar-border: 240 3.7% 15.9%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+body {
+  background: #000;
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+}
+
+/* ---- the shell is exactly one screen tall ------------------------------
+   The playlist is the only thing in this app that scrolls. The header, the
+   stage, the controls and the ticker are all pinned inside the viewport, so
+   a 5,000-track list can never make the DOCUMENT taller than the window:
+   `overflow: hidden` on the root scroller is what stops wheel/keys/trackpad
+   from moving it at all. 100dvh where the browser knows it (mobile URL bar),
+   100vh under it. */
+html,
+body {
+  overflow: hidden;
+  height: 100%;
+}
+.md-root {
+  height: 100vh;
+  height: 100dvh;
+}
+
+/* the menus' surface: the panel's own colour as a SOLID fill. A translucent
+   or blurred one picks up whatever sits behind it — rows, the group header,
+   a bright wallpaper frame — and goes dark-on-dark. This token is what every
+   dropdown in the tracklist paints itself with. */
+:root {
+  --md-menu-surface: #0b0b10;
+}
+.menu-surface {
+  background-color: var(--md-menu-surface);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+.font-mono, code {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* glass shine sweep — transform-based (compositor-only). Animating `left`
+   forced style+layout+paint of the case subtree every frame, which re-rasterized
+   the whole MiniDisc layer (backdrop-filter included) at 60Hz. translateX % is
+   element-relative (w-28%), so -40%/130% of the case width == -142.857%/464.286%
+   of the strip — identical sweep path. */
+@keyframes shine {
+  0% { transform: translateX(-142.857%) skewX(-12deg); }
+  55% { transform: translateX(464.286%) skewX(-12deg); }
+  100% { transform: translateX(464.286%) skewX(-12deg); }
+}
+/* will-change: promote the sweep strip to its own composited layer so the
+   animation can never dirty the case group's raster (backdrop-filter included);
+   contain: paint keeps the sweep's repaint strictly inside the strip box */
+.animate-shine {
+  animation: shine 5.5s ease-in-out infinite;
+  will-change: transform;
+  contain: paint;
+}
+
+/* footer marquee */
+@keyframes marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+.animate-marquee { animation: marquee 22s linear infinite; }
+
+/* blinking REC */
+@keyframes blink { 50% { opacity: 0.15; } }
+.animate-blink { animation: blink 1s steps(1) infinite; }
+
+/* ambient glow breathing */
+@keyframes glow-breathe {
+  0%, 100% { opacity: 0.35; transform: translate(-50%, -50%) scale(1); }
+  50% { opacity: 0.55; transform: translate(-50%, -50%) scale(1.07); }
+}
+.animate-glow-breathe { animation: glow-breathe 7s ease-in-out infinite; }
+
+/* equalizer bars in track list */
+.eq-bars { display: inline-flex; align-items: flex-end; gap: 2px; height: 14px; }
+.eq-bars i {
+  width: 3px;
+  background: linear-gradient(180deg, #8effc1, #37d67a);
+  animation: eq 0.8s ease-in-out infinite;
+}
+.eq-bars i:nth-child(1) { height: 60%; animation-delay: 0s; }
+.eq-bars i:nth-child(2) { height: 100%; animation-delay: 0.2s; }
+.eq-bars i:nth-child(3) { height: 45%; animation-delay: 0.35s; }
+.eq-bars i:nth-child(4) { height: 80%; animation-delay: 0.1s; }
+@keyframes eq { 50% { transform: scaleY(0.3); } }
+
+/* (the pink mini equaliser that used to sit beside the row number is gone:
+   the active row says what it is with its gradient and its progress line) */
+
+/* scanlines */
+.scanlines {
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(255,255,255,0.5) 0px,
+    rgba(255,255,255,0.5) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+}
+
+/* film grain */
+.grain {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.6'/%3E%3C/svg%3E");
+  animation: grain 0.6s steps(4) infinite;
+}
+@keyframes grain {
+  0% { transform: translate(0,0); }
+  25% { transform: translate(-4%,3%); }
+  50% { transform: translate(3%,-4%); }
+  75% { transform: translate(-3%,-2%); }
+  100% { transform: translate(0,0); }
+}
+
+/* now-playing title ticker */
+@keyframes title-scroll {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+.animate-title-scroll { animation: title-scroll 14s linear infinite; }
+
+/* moving gradient theme */
+@keyframes aurora {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+.animate-aurora { animation: aurora 18s ease-in-out infinite; }
+
+/* the live-visuals circle in the header — a quiet turn of hues while one of
+   the live visuals is behind the player */
+@keyframes liveviz {
+  to { filter: hue-rotate(360deg); }
+}
+.animate-liveviz { animation: liveviz 7s linear infinite; }
+
+/* full-page aurora backdrop: drifts via transform (compositor-only, no repaint).
+   the layer is oversized (-40% inset) so translation never exposes an edge.
+   at fx tier 2 the governor's `animation: none !important` blanket freezes
+   both drifts — deliberate: the band is a full-screen blend, so keeping it
+   moving on a struggling machine costs more frames than the theme is worth.
+   The backdrop still looks right, it just stops moving. */
+@keyframes aurora-drift {
+  0% { transform: translate3d(0, 0, 0); }
+  50% { transform: translate3d(-14%, -7%, 0); }
+  100% { transform: translate3d(0, 0, 0); }
+}
+.aurora-layer {
+  animation: aurora-drift 22s ease-in-out infinite;
+  will-change: transform;
+}
+
+/* the brighter band that rides on top of the bloom: a slower cycle running
+   the OTHER way, with a touch of rotation, so the two fields slide across
+   each other instead of repeating in lockstep */
+@keyframes aurora-band-drift {
+  0% { transform: translate3d(0, 0, 0) rotate(-1.5deg); }
+  50% { transform: translate3d(9%, 5%, 0) rotate(1.5deg); }
+  100% { transform: translate3d(0, 0, 0) rotate(-1.5deg); }
+}
+.aurora-band {
+  animation: aurora-band-drift 34s ease-in-out infinite;
+  will-change: transform;
+  mix-blend-mode: screen;
+}
+
+/* creator ring entrance (plays on mount; final state is also the resting state).
+   !important + element-qualified selectors (g./div.): the fx governor's blanket
+   `animation: none !important` must NOT eat these one-shot transitions —
+   killing an infinite loop saves frames, but killing an entrance just makes the
+   menu pop in instantly, and on close the parent scale-out dies while the
+   segments/eye (higher specificity, already !important) still fade → the
+   "tiles vanish, eye lingers" glitch. One-shots play regardless of tier. */
+@keyframes seg-in {
+  from { opacity: 0; transform: rotate(-50deg) scale(0.55); }
+  to { opacity: 1; transform: rotate(0deg) scale(1); }
+}
+g.creator-seg {
+  transform-origin: 200px 200px;
+  transform-box: view-box;
+  animation: seg-in 620ms cubic-bezier(0.34, 1.56, 0.64, 1) both !important;
+}
+@keyframes eye-in {
+  from { opacity: 0; transform: translate(-50%, -50%) scale(0.4); }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+div.creator-eye {
+  /* centering lives on the BASE rule, not only in the keyframes: if the
+     animation is dropped (css still loading, stylesheet hot-swap, suspended
+     tab) the eye must stay in the middle of the ring — the keyframes only
+     add the pop-in scale on top of this */
+  transform: translate(-50%, -50%);
+  animation: eye-in 500ms ease 180ms both !important;
+}
+@keyframes ring-out {
+  from { opacity: 1; transform: scale(1); }
+  to { opacity: 0; transform: scale(0.75) translateY(20px); }
+}
+div.creator-closing {
+  animation: ring-out 300ms ease both !important;
+}
+.creator-closing .creator-seg {
+  animation: seg-out 260ms ease both !important;
+  animation-delay: 0ms !important;
+}
+.creator-closing .creator-eye {
+  animation: eye-out 260ms ease both !important;
+}
+@keyframes seg-out {
+  from { opacity: 1; transform: rotate(0deg) scale(1); }
+  to { opacity: 0; transform: rotate(28deg) scale(0.55); }
+}
+@keyframes eye-out {
+  from { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  to { opacity: 0; transform: translate(-50%, -50%) scale(0.45); }
+}
+
+/* settings panels + transient pills — smooth, compositor-only (opacity +
+   transform) open/close. Same governor exemption as the creator ring:
+   div.-qualified selectors + !important, because a one-shot transition
+   costs nothing to keep and killing it just makes panels pop instantly.
+   panels keep mounting during a ~160ms exit (Home holds them via a
+   `closing` flag), pills just fade in on their own. */
+@keyframes panel-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.97); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes panel-out {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: translateY(8px) scale(0.98); }
+}
+@keyframes pop-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes drop-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+div.settings-panel {
+  animation: panel-in 200ms cubic-bezier(0.22, 1, 0.36, 1) both !important;
+}
+div.settings-panel.is-closing {
+  animation: panel-out 160ms ease-in both !important;
+}
+/* lyrics overlay on the disc — fades and settles in as the CD slides aside */
+div.lyrics-overlay {
+  animation: lyrics-fade 450ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes lyrics-fade {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+div.pop-in {
+  animation: pop-in 180ms ease-out both !important;
+}
+div.drop-overlay {
+  animation: drop-fade-in 160ms ease-out both !important;
+}
+
+/* playlist drawer motion — entering a folder replays the slide, and rows
+   stagger in behind it; deletion keeps the row mounted for its exit beat.
+   Same governor exemption as the other one-shots (`div.` qualified +
+   !important beats the tier-2 `animation: none` blanket): an entrance or exit
+   that gets killed just makes rows pop, which is the thing we are fixing. */
+div.playlist-view {
+  animation: playlist-view-in 260ms cubic-bezier(0.22, 1, 0.36, 1) both !important;
+  /* the drawer is device surface, so its scrollbar gets the same hairline
+     treatment as the tracklist instead of a bright OS bar */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+}
+div.playlist-view::-webkit-scrollbar {
+  width: 6px;
+}
+div.playlist-view::-webkit-scrollbar-track {
+  background: transparent;
+}
+div.playlist-view::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+}
+div.playlist-view::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+@keyframes playlist-view-in {
+  from { opacity: 0; transform: translateX(18px); }
+  to { opacity: 1; transform: none; }
+}
+div.playlist-row-in {
+  animation: playlist-row-in 280ms cubic-bezier(0.22, 1, 0.36, 1) both !important;
+}
+@keyframes playlist-row-in {
+  from { opacity: 0; transform: translateY(7px); }
+  to { opacity: 1; transform: none; }
+}
+div.playlist-row-out {
+  animation: playlist-row-out 200ms ease-in both !important;
+  pointer-events: none;
+}
+@keyframes playlist-row-out {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: translateX(20px); filter: blur(3px); }
+}
+/* selection beat: the accent bar mounts with the newly active row, so moving
+   the selection (click, next/prev, auto-advance) has a visible landing */
+span.playlist-select {
+  transform-origin: top;
+  animation: playlist-select 340ms cubic-bezier(0.22, 1, 0.36, 1) both !important;
+}
+@keyframes playlist-select {
+  from { opacity: 0; transform: scaleY(0.3); }
+  55% { opacity: 1; }
+  to { opacity: 0.8; transform: scaleY(1); box-shadow: 0 0 10px rgba(125, 216, 255, 0.35); }
+}
+
+/* keyboard shortcuts must not paint focus rings — buttons keep their
+   chrome look via box-shadow, so only the outline is removed here */
+:focus,
+:focus-visible {
+  outline: none !important;
+  outline-offset: 0 !important;
+}
+
+/* auto-hidden cursor after idle (media player behavior) */
+.cursor-none,
+.cursor-none * {
+  cursor: none !important;
+}
+
+/* lyrics: the 3-second return bar — fills while the countdown runs, then
+   the view is handed back to the line being sung (restarted from zero by
+   the panel on every scroll, so it always lands with the timer) */
+.lyrics-return-bar {
+  animation: lyrics-return-fill 3s linear forwards;
+}
+@keyframes lyrics-return-fill {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+/* HIDE UI (H) — only while a live visual is on. The chrome fades out and
+   stops taking clicks; the backdrop layers (.bg-layer — theme, wallpaper,
+   live visual, scanlines) keep the window. Portaled panels (drawer, meta
+   editor) hang off body directly, so they are covered here too. */
+body.hide-ui .md-root > *:not(.bg-layer),
+body.hide-ui > div:not(#root) {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transition: opacity 300ms ease;
+}
+body.hide-ui,
+body.hide-ui * {
+  cursor: none !important;
+}
+
+/* frame-time governor tiers (set by WallpaperPlayer via data-fx)
+   0 full · 1 backdrop-filter off · 2 infinite animations off ·
+   3 full-screen blend layers off · 4 wallpaper decode paused (last resort) */
+[data-fx='2'] *,
+[data-fx='3'] *,
+[data-fx='4'] * {
+  animation: none !important;
+}
+/* tier 3+: the scanlines + grain re-blend full-screen against every frame of
+   a VIDEO wallpaper — the dominant per-frame cost (why 720p video measured
+   ~18fps while static themes hold 45-70). They fade out automatically and
+   ONLY while frames are actually bad; nothing is removed or disabled for the
+   user, static wallpapers never trigger this (their blend is rasterized once) */
+.fx-blend {
+  transition: opacity 300ms ease;
+}
+[data-fx='3'] .fx-blend,
+[data-fx='4'] .fx-blend {
+  opacity: 0 !important;
+}
+/* tier 3+ "video mode": the full-screen bloom glow and vignette composite
+   over the wallpaper every frame. Same automatic fade as the blend layers —
+   back within ~10s of healthy frames. The disc's own sheens/glare (.fx-disc)
+   are NOT here: they live only on the case area, they are the CD's identity,
+   and fading them is what made the assembly look "naked" over a video. */
+.fx-video {
+  transition: opacity 300ms ease;
+}
+[data-fx='3'] .fx-video,
+[data-fx='4'] .fx-video {
+  opacity: 0 !important;
+}
+/* tier 4 ONLY (last resort, decode paused): even the case-area screen-blend
+   sheens + glare go — the frozen wallpaper frame carries the look alone */
+.fx-disc {
+  transition: opacity 300ms ease;
+}
+[data-fx='4'] .fx-disc {
+  opacity: 0 !important;
+}
+/* ---- CD hub (track-cover face only) ------------------------------------
+   A cover is a square photo on a round disc, so without a spindle the art
+   reads as a cropped picture. Two pieces, real CD proportions on a 120mm
+   disc: a 15mm hole and a ~33mm clamping ring.
+
+   The hole is a REAL hole: .disc-face masks it straight through the artwork,
+   so the wallpaper and the case glass behind show through, and nothing is
+   painted into it. The ring is bare polycarbonate — tint and highlights only,
+   no dark fill and no shadow over the artwork. */
+.disc-face {
+  /* 12.5% of the disc's width = the 15mm hole; closest-side makes the
+     gradient's 100% exactly half the square, so the numbers stay literal */
+  -webkit-mask-image: radial-gradient(circle closest-side, transparent 0 12.5%, #000 13.3%);
+  mask-image: radial-gradient(circle closest-side, transparent 0 12.5%, #000 13.3%);
+}
+.disc-hub {
+  position: absolute;
+  /* above both disc faces: during a disc exchange the outgoing face is a
+     z-index 2 duplicate, and the spindle must stay over the new disc */
+  z-index: 3;
+  left: 50%;
+  top: 50%;
+  width: 27.5%;
+  aspect-ratio: 1 / 1;
+  translate: -50% -50%;
+  border-radius: 50%;
+  pointer-events: none;
+  /* hollow in the middle, then glass: a cool tint, a machined step ring and
+     a lit outer lip. closest-side so 100% is this ring's own radius — with
+     the default farthest-corner every stop would sit 1.41× too far out and
+     leave a bare-art gap right at the hole. 45.4% == the hole edge. */
+  background: radial-gradient(
+    circle closest-side at 50% 50%,
+    rgba(255, 255, 255, 0) 0 45.4%,
+    rgba(206, 226, 250, 0.1) 47%,
+    rgba(255, 255, 255, 0.06) 58%,
+    rgba(255, 255, 255, 0.11) 70%,
+    rgba(255, 255, 255, 0.32) 72.6%,
+    rgba(255, 255, 255, 0.08) 74.4%,
+    rgba(255, 255, 255, 0.16) 85%,
+    rgba(255, 255, 255, 0.36) 93%,
+    rgba(255, 255, 255, 0.14) 97%,
+    rgba(255, 255, 255, 0.5) 100%
+  );
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.34),
+    inset 0 1px 1px rgba(255, 255, 255, 0.5),
+    inset 0 -1px 1px rgba(255, 255, 255, 0.18);
+}
+/* the glint across the glass, masked to the collar itself */
+.disc-hub::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 150deg,
+    rgba(255, 255, 255, 0) 0deg,
+    rgba(255, 255, 255, 0.55) 38deg,
+    rgba(255, 255, 255, 0) 92deg,
+    rgba(255, 255, 255, 0) 236deg,
+    rgba(255, 255, 255, 0.3) 284deg,
+    rgba(255, 255, 255, 0) 330deg
+  );
+  -webkit-mask-image: radial-gradient(circle closest-side, transparent 0 44%, #000 52%);
+  mask-image: radial-gradient(circle closest-side, transparent 0 44%, #000 52%);
+  mix-blend-mode: screen;
+  opacity: 0.9;
+}
+/* the polished lip where the glass meets the hole — 27.27% inset is a
+   45.45% circle, i.e. the hole, centred inside this ring */
+.disc-hub::after {
+  content: '';
+  position: absolute;
+  inset: 27.27%;
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.6),
+    0 0 9px rgba(255, 255, 255, 0.32),
+    inset 0 1px 1px rgba(255, 255, 255, 0.55);
+}
+
+/* backdrop-filter at ANY grade: blur is re-evaluated against the backdrop on
+   every frame the backdrop changes — a video wallpaper changes it every
+   frame (panels/pills/overlay stay visually identical on their dark fills) */
+[data-fx] .fx-blur {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+/* any governor grade drops backdrop-filter — same rule as the 60fps
+   reference pipeline: it is the priciest paint when a video wallpaper
+   sits underneath */
+[data-fx] .disc-glass {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* boot ready tick: visible ~1.2s then fades out */
+@keyframes ready-fade {
+  0%, 60% { opacity: 1; }
+  100% { opacity: 0; }
+}
+.ready-fade { animation: ready-fade 2s ease forwards; }
+
+/* radio station lists — a dark hairline scrollbar instead of the platform's
+   white one, which read as a bright stripe down a dark panel */
+.radio-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+.radio-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+.radio-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.radio-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
+}
+.radio-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* loading skeletons — a shimmer where the rows will be, rather than a
+   centred word that makes the panel look broken */
+.skeleton-row {
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.04) 25%, rgba(255, 255, 255, 0.09) 37%, rgba(255, 255, 255, 0.04) 63%);
+  background-size: 400% 100%;
+  animation: skeleton-shimmer 1.4s ease infinite;
+}
+@keyframes skeleton-shimmer {
+  0% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0 50%;
+  }
+}
+
+/* playlist scroll area — the app's ONE scroller, so it gets the same thin
+   hairline scrollbar as the drawer rather than the platform's bright bar.
+   It fills whatever height the panel has left (flex-1/min-h-0 in the panel),
+   which is what keeps the document itself exactly one screen tall. */
+.playlist-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+}
+.playlist-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.playlist-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.playlist-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+}
+.playlist-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.26);
+}
+
+/* ---- tracklist panel -------------------------------------------------
+   The row is a fixed grid: [index/EQ] [art] [title+artist] [duration]
+   [actions]. The middle column is the only flexible one, so a long title
+   takes the room a short one leaves instead of pushing the duration off the
+   right-hand side, and the duration keeps its slot forever. */
+.playlist-row {
+  display: grid;
+  /* art · title+artist · duration · actions. The number column is gone (the
+     row is identified by its art), so the flexible middle gets it back. */
+  grid-template-columns: auto minmax(0, 1fr) 40px auto;
+  column-gap: 0.9rem;
+  align-items: center;
+}
+/* the row being played: a soft gradient wash so it reads as current even
+   in a monochrome wallpaper, with the progress line along its bottom edge */
+.playlist-row-active {
+  background: linear-gradient(
+    90deg,
+    rgba(125, 216, 255, 0.14),
+    rgba(201, 156, 255, 0.07) 55%,
+    rgba(255, 157, 216, 0.03)
+  );
+}
+/* a row picked with ctrl/shift — a fill and a hairline, so a multi-selection
+   reads as a block without competing with the playing row's gradient */
+.playlist-row-selected {
+  background: rgba(255, 255, 255, 0.085);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.13);
+}
+
+/* glass quality: a backdrop-filter is re-evaluated whenever the backdrop
+   changes, and a live wallpaper changes it every frame. The governor's tier 1
+   already turns it off via .fx-blur; this is the user's own switch for the
+   same thing when they would rather keep the frames. */
+[data-glass='off'] *,
+[data-glass='off'] *::before,
+[data-glass='off'] *::after {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* ---- motion language --------------------------------------------------
+   Two curves for the whole app: the settle (fast out, slow in — everything
+   that arrives) and the spring (a touch of overshoot — everything that is
+   pressed or flung). Anything new should reach for one of these rather than
+   inventing a third. */
+:root {
+  --ease-settle: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* crossfade: what changes with the track (title, ticker, panel contents)
+   eases in over ~450ms instead of snapping to the next string */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.fade-in {
+  animation: fade-in 450ms var(--ease-settle) both;
+}
+
+/* the running ticker at the foot of the window: fade both edges, so a word
+   never meets the frame at full brightness */
+.marquee-fade {
+  -webkit-mask-image: linear-gradient(90deg, transparent, black 5%, black 95%, transparent);
+  mask-image: linear-gradient(90deg, transparent, black 5%, black 95%, transparent);
+}
+
+/* reduced motion — the calm fallback: nothing enters, nothing scrolls on
+   its own, and transitions collapse to an instant change */
+@media (prefers-reduced-motion: reduce) {
+  div.playlist-row-in,
+  div.playlist-row-out,
+  span.playlist-select,
+  .animate-marquee,
+  .eq-mini i,
+  .ready-fade {
+    animation: none !important;
+  }
+  *,
+  *::before,
+  *::after {
+    transition-duration: 1ms !important;
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
+/* ---- frame bars -------------------------------------------------------
+   The black bars at the top and bottom of the window, drawn as elements over
+   the wallpaper (any wallpaper) and under the interface — so the top bar and
+   the bottom ticker sit INSIDE the frame. scaleY, never height: the height
+   is a constant and the transform is the only thing that moves. */
+.frame-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  height: 110px;
+  background: #000;
+  transform: scaleY(var(--bar, 0.62));
+  transform-origin: top;
+  will-change: transform;
+  z-index: 20; /* above the wallpaper layers, below every piece of interface */
+  pointer-events: none;
+}
+.frame-bar-bottom {
+  transform-origin: bottom;
+}
+@media (prefers-reduced-motion: reduce) {
+  .frame-bar {
+    transform: scaleY(0.62);
+  }
+}
+
+/* chrome volume range */
+.chrome-range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, #e8ecf1, #8d959f);
+  outline: none;
+  cursor: pointer;
+}
+.chrome-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #fff, #aab 60%, #556);
+  box-shadow: 0 0 8px rgba(255,255,255,0.6), 0 1px 3px rgba(0,0,0,0.6);
+}
+.chrome-range::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: none;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #fff, #aab 60%, #556);
+  box-shadow: 0 0 8px rgba(255,255,255,0.6), 0 1px 3px rgba(0,0,0,0.6);
+}

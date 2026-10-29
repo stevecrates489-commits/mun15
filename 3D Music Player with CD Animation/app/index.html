@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MUN15H — MiniDisc Player</title>
+    <style>html,body{background:#060708;margin:0;overflow:hidden;height:100%}</style>
+    <!-- load-spread #1 (t=0): warm the font CDN connections while the boot
+         HTML is still streaming; stylesheet is non-blocking so the boot
+         paints on frame one -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300..700&family=JetBrains+Mono:wght@400;700&display=swap" media="print" onload="this.media='all'">
+    <!-- load-spread #2 (t=0): fetch the heavy disc art now, not when React
+         mounts at the end of the intro -->
+    <link rel="preload" as="image" href="/src/assets/disc.png">
+    <link rel="preload" as="image" href="/src/assets/chrome.png">
+    <script>
+      /* load-spread #3: decode the art during the intro, staggered — image
+         decode runs off-thread, so this costs the boot nothing and the gate's
+         decode() checks resolve from cache instantly. It waits for the intro's
+         first second: those frames are the shader's compile and the module
+         graph's evaluation, and two decodes landing in them is felt as a
+         stutter at exactly the moment the picture starts moving. */
+      ['disc.png', 'chrome.png'].forEach(function (n, i) {
+        setTimeout(function () {
+          var im = new Image();
+          im.onload = function () { if (im.decode) im.decode().catch(function () {}); };
+          im.src = '/src/assets/' + n;
+        }, 1000 + i * 350);
+      });
+      /* load-spread #4: kick the font files off the moment the face rules
+         exist, instead of waiting for React to render text with them */
+      var fontCss = document.querySelector('link[href*="fonts.googleapis"]');
+      function warmFonts() {
+        try {
+          document.fonts.load('400 16px "Space Grotesk"');
+          document.fonts.load('700 16px "JetBrains Mono"');
+        } catch (e) {}
+      }
+      if (fontCss) {
+        fontCss.addEventListener('load', warmFonts, { once: true });
+        if (fontCss.sheet) warmFonts();
+      }
+    </script>
+    <style>
+/* ===== BOOT · CSS (copy this block) ===== */
+#boot{position:fixed;inset:0;z-index:99999;background:#060708;cursor:pointer;overflow:hidden;
+  font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;color:#9aa3ab;--teal:#5cf0c0}
+/* the canvas paints its own backdrop and punches the reveal hole through
+   itself, so the element behind it must be see-through once the wipe starts */
+#boot.ready{background:transparent;pointer-events:none}
+#boot.gone{display:none}
+#boot canvas{position:absolute;inset:0;width:100%;height:100%;display:block;opacity:0;transition:opacity .3s ease}
+/* the canvas only appears once a real frame has been drawn: the first
+   frames of a freshly compiled shader are the slowest ones, and a blank
+   or half-drawn disc at the top of the intro reads as a stutter */
+#boot.live canvas{opacity:1}
+#boot .ui{position:absolute;inset:0;pointer-events:none;transition:opacity .7s,transform .9s cubic-bezier(.6,0,.2,1),filter .7s}
+#boot.exit .ui{opacity:0;transform:translateY(-26px) scale(1.04);filter:blur(10px)}
+#boot .bar{position:absolute;top:24px;left:32px;right:32px;display:flex;justify-content:space-between;
+  font-size:11px;letter-spacing:.35em;color:#5d656c}
+#boot .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#333;margin-right:12px;transition:.4s}
+#boot.ready .dot{background:var(--teal);box-shadow:0 0 12px var(--teal)}
+#boot .low{position:absolute;left:0;right:0;bottom:9vh;display:flex;flex-direction:column;align-items:center;gap:20px}
+#boot .title{display:flex;font-size:clamp(40px,9vw,92px);font-weight:700;line-height:1;padding-left:.2em}
+#boot .l{display:block;margin-right:.2em;opacity:0;transform:translateY(18px);filter:blur(14px);color:transparent;
+  background:linear-gradient(105deg,transparent 42%,rgba(255,255,255,.95) 50%,transparent 58%) 160% 0/260% 100% no-repeat,
+             linear-gradient(180deg,#fff 0%,#a9b3bd 40%,#15181b 50%,#c8d2db 58%,#fff 100%);
+  -webkit-background-clip:text;background-clip:text}
+#boot .in .l{animation:lIn 1.1s cubic-bezier(.2,.8,.2,1) forwards,lShine 2.4s ease-in-out 1.2s infinite;
+  animation-delay:calc(var(--i)*80ms),calc(1.2s + var(--i)*110ms)}
+@keyframes lIn{to{opacity:1;transform:none;filter:blur(0)}}
+@keyframes lShine{0%{background-position:160% 0,0 0}60%,100%{background-position:-60% 0,0 0}}
+#boot .meta{width:min(360px,78vw);font-size:10px;letter-spacing:.32em}
+#boot .row{display:flex;justify-content:space-between;margin-bottom:9px}
+#boot .row b{font-weight:400;color:#e8eef4}
+#boot.ready .lab{color:var(--teal)}
+#boot .hair{height:1px;background:#1b1f23}
+#boot .fill{height:1px;width:0;background:linear-gradient(90deg,#6b7178,#fff,var(--teal));box-shadow:0 0 10px rgba(200,230,255,.8)}
+/* While the intro is up the player is mounted behind an opaque overlay: its
+   full-screen aurora, grain and shine keep animating where nobody can see
+   them, and every one of those frames is a frame the intro's shader does not
+   get. They are stopped for the length of the intro and resume on `bootdone`,
+   so the first seconds are the intro's alone. */
+html.booting #root,html.booting #root *{animation-play-state:paused!important}
+/* ===== /BOOT CSS ===== */
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+<!-- ===== BOOT · HTML ===== -->
+<div id="boot" aria-hidden="true">
+  <canvas></canvas>
+  <div class="ui">
+    <div class="bar"><span><i class="dot"></i>MD WALKMAN · MZ-MUN15H</span><span>HOLOGRAPHIC SOUND SYSTEM</span><span>MDLP · SP MODE · 74MIN</span></div>
+    <div class="low">
+      <div class="title"></div>
+      <div class="meta">
+        <div class="row"><span class="lab">READING TOC</span><b class="pc">000</b></div>
+        <div class="hair"><div class="fill"></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ===== BOOT · JS =====
+   Liquid-chrome disc intro. Everything is one clock; the exit is a chrome
+   flood that opens into a hole onto the player behind it. Silent — the old
+   synthesized hits and whoosh are gone.
+
+   Boot.waitFor(promise)  hold the exit until the app is genuinely ready
+   Boot.play() · Boot.skip() · event 'bootdone'
+   The hold never blocks the page: if the rAF chain dies, a heartbeat ends
+   the intro anyway. */
+(function(){
+const boot=document.getElementById('boot'),cv=boot.querySelector('canvas');
+document.documentElement.classList.add('booting');
+const gl=cv.getContext('webgl',{premultipliedAlpha:true,antialias:true,alpha:true});
+const reduce=matchMedia('(prefers-reduced-motion:reduce)').matches;
+const DUR=reduce?1.8:5.6, EXIT=reduce?.9:3, ONCE=false;   // seconds
+const WORD='MUN15H', LABELS=['READING TOC','SA COATING ADVANCE','LOADING TRACKLIST · 05','TUNING HOLOGRAPHIC CORE','READY'];
+const SYNC_LABEL='SYNCING LIBRARY';
+const title=boot.querySelector('.title');
+title.innerHTML=[...WORD].map((c,i)=>`<span class="l" style="--i:${i}">${c}</span>`).join('');
+const lab=boot.querySelector('.lab'),pc=boot.querySelector('.pc'),fill=boot.querySelector('.fill');
+
+/* ---- state ---- */
+let pending=0, skipped=false, phase=0, clock=0, pS=0, pV=0, tReady=0, tExit=0, syncWall=0;
+let tx=0,ty=0,mx=0,my=0,last=0,raf=0,warm=0,finished=false,lastFrameAt=0;
+
+function end(){
+  if(finished)return;finished=true;
+  document.documentElement.classList.remove('booting');
+  boot.classList.add('gone');
+  try{sessionStorage.setItem('booted','1')}catch(e){}
+  window.dispatchEvent(new Event('bootdone'))
+}
+
+window.Boot={
+  play:()=>play(false),
+  skip:()=>{skipped=true},
+  waitFor:p=>{pending++;Promise.resolve(p).catch(()=>{}).then(()=>{pending--})},
+};
+window.playBoot=()=>play(false);
+
+if(!gl){setTimeout(end,500);return}
+
+/* The chrome normal is a screen-space derivative. WebGL 1 exposes it as an
+   extension; where it is there the shader reads the height once per pixel
+   instead of three times, which is most of the intro's cost. */
+const DERIV=gl.getExtension('OES_standard_derivatives');
+const FS=(DERIV?'#extension GL_OES_standard_derivatives : enable\n#define DERIV 1\n':'')+`
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+uniform vec2 uRes,uM; uniform float uT,uP,uF,uH;
+float gE,gFx,gHx,gRh,gRb,gR0; const vec2 C=vec2(0.,.035);
+float hash(vec2 p){return fract(sin(dot(p,vec2(12.9898,78.233)))*43758.5453);}
+float smin(float a,float b,float k){float h=max(k-abs(a-b),0.)/k;return min(a,b)-h*h*k*.25;}
+float scene(vec2 p){
+  float L=length(p-C), ang=atan(p.y-C.y,p.x-C.x);
+  float d=L-gR0;
+  for(int i=0;i<6;i++){
+    float fi=float(i), dir=mod(fi,2.)<1.?1.:-1.;
+    float a=uT*(.5+.13*fi)*dir+fi*1.047;
+    float dist=mix(.62,.07,smoothstep(0.,.95,uP))*(1.+.22*sin(uT*1.3+fi*2.));
+    vec2 q=C+vec2(cos(a),sin(a))*dist;
+    d=smin(d,length(p-q)-(.03+.012*sin(fi*2.4)),.11);
+  }
+  d+=(.008*sin(ang*5.+uT*2.)+.004*sin(ang*11.-uT*3.))*gE;
+  if(gFx>0.) d=smin(d,L-gFx*1.75+.03*sin(ang*4.+uT*3.)*gFx,.2);
+  if(gHx>0.){
+    float hw=(.05*sin(ang*4.+uT*3.)+.03*sin(ang*7.-uT*2.4))*smoothstep(0.,.3,gHx);
+    d=max(d,gRh+hw-L);
+  }
+  return d;
+}
+float H(vec2 p){
+  float L=length(p-C);
+  /* every sphere sits inside ~0.9 of the centre and a flood never reaches
+     past its own radius, so out there the height is flat — and the six
+     sphere distances would only prove it */
+  if(L>max(1.05,gFx*1.85)+gRb) return 0.;
+  float d=max(scene(p),-gRb);
+  float h=sqrt(max(-d*(2.*gRb+d),0.));
+  h+=.004*sin(L*60.-uT*5.)+.03*sin(p.x*5.+uT)*sin(p.y*4.-uT*.8)*gFx;
+  return h;
+}
+vec3 env(vec3 r){
+  float y=r.y;
+  vec3 e=mix(vec3(.02,.025,.03),vec3(.78,.84,.95),smoothstep(-.2,.9,y));
+  e+=exp(-pow((y-.05)*9.,2.))*.9;
+  e*=mix(.12,1.,smoothstep(-.35,-.05,y));
+  e+=vec3(1.,.97,.92)*smoothstep(.9,.98,sin(r.x*5.+r.y*3.)*.5+.5)*smoothstep(-.1,.5,y)*1.1;
+  e+=pow(max(dot(r,normalize(vec3(.4,.8,.5))),0.),30.)*2.5;
+  e+=vec3(.1,1.,.75)*pow(max(dot(r,normalize(vec3(-.9,.1,.3))),0.),12.)*1.3;
+  e+=vec3(.7,.3,1.)*pow(max(dot(r,normalize(vec3(.9,-.2,.3))),0.),12.)*1.;
+  return e;
+}
+void main(){
+  float asp=uRes.x/uRes.y, s=min(1.,asp/.9);
+  vec2 p=(gl_FragCoord.xy-.5*uRes)/uRes.y/s;
+  gE=smoothstep(0.,1.,uP); gFx=uF; gHx=uH;
+  gRh=gHx*1.95; gR0=mix(.04,.19,gE)+.006*sin(uT*2.6); gRb=max(gR0,gFx*1.75);
+  float d0=scene(p), aa=2./uRes.y/s;
+  float mask=1.-smoothstep(-aa,aa,d0);
+  /* the height is read outside the branch on purpose: a derivative taken in
+     divergent flow is undefined, and the silhouette is exactly where the
+     flow diverges */
+  float h0=H(p);
+#ifdef DERIV
+  vec2 g=vec2(dFdx(h0),dFdy(h0))*(uRes.y*s)*.45;
+#else
+  float e=.0025;
+  vec2 g=vec2(H(p+vec2(e,0.))-h0,H(p+vec2(0.,e))-h0)/e*.45;
+#endif
+  vec3 bg=vec3(.012,.014,.02)+exp(-max(d0,0.)*7.)*.16*vec3(.55,.7,1.)*(1.-gFx);
+  bg*=1.-.5*dot(p,p)*.5;
+  vec3 chrome=vec3(0.);
+  if(mask>0.){
+    vec3 n=normalize(vec3(-g,1.));
+    vec3 r=vec3(0.,0.,-1.)+2.*n.z*n;
+    r.xy+=uM*vec2(.35,.25); r.y+=.3; r=normalize(r);
+    vec3 c=env(r);
+    float fr=pow(1.-n.z,2.5);
+    vec3 irid=.5+.5*cos(6.2832*(fr*1.5+h0*.8+vec3(0.,.33,.67)));
+    c*=mix(vec3(1.),.55+.8*irid,.6*smoothstep(0.,.8,fr+.15));
+    c+=pow(max(dot(n,normalize(vec3(-.4,.6,.7))),0.),90.)*1.5;
+    c*=1.-.45*smoothstep(-.012,0.,d0);
+    c+=exp(-pow((d0+.003)/.004,2.))*.25;
+    c=1.-exp(-c*1.4); chrome=pow(c,vec3(1.05));
+  }
+  vec3 col=mix(bg,chrome,mask);
+  col+=(hash(gl_FragCoord.xy+uT)-.5)*.025;
+  float hb=smoothstep(0.,.03,gHx); gl_FragColor=vec4(mix(max(col,0.),chrome*mask,hb),mix(1.,mask,hb));
+}`;
+function sh(t,src){const s=gl.createShader(t);gl.shaderSource(s,src);gl.compileShader(s);
+  if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)){console.error(gl.getShaderInfoLog(s));return null}return s}
+const vs=sh(gl.VERTEX_SHADER,'attribute vec2 a;void main(){gl_Position=vec4(a,0.,1.);}'),fs=sh(gl.FRAGMENT_SHADER,FS);
+if(!vs||!fs){end();return}
+const pg=gl.createProgram();gl.attachShader(pg,vs);gl.attachShader(pg,fs);gl.linkProgram(pg);gl.useProgram(pg);
+const buf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buf);
+gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW);
+const loc=gl.getAttribLocation(pg,'a');gl.enableVertexAttribArray(loc);gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+const U=n=>gl.getUniformLocation(pg,n),uRes=U('uRes'),uM=U('uM'),uT=U('uT'),uP=U('uP'),uF=U('uF'),uH=U('uH');
+/* Render scale: the intro is drawn at the display's own density — the chrome
+   disc is the first thing anyone sees, and a stretched one reads as soft
+   video rather than polished metal. Capped at 2 so a 3x display does not pay
+   for pixels nobody can see. */
+function resize(){const d=Math.min(devicePixelRatio||1,2);cv.width=Math.max(1,Math.round(innerWidth*d));cv.height=Math.max(1,Math.round(innerHeight*d));gl.viewport(0,0,cv.width,cv.height)}
+addEventListener('resize',resize);resize();
+
+const stops=[[0,0],[.2,.14],[.4,.36],[.55,.4],[.8,.82],[1,1]];   // loading stalls (spring-smoothed below)
+const curve=t=>{for(let i=1;i<stops.length;i++){const a=stops[i-1],b=stops[i];if(t<=b[0])return a[1]+(b[1]-a[1])*(t-a[0])/(b[0]-a[0])}return 1};
+const cl=(v,a=0,b=1)=>Math.min(b,Math.max(a,v)), ease=t=>t*t*t*(t*(t*6-15)+10);
+function damp(c,t,v,st,dt){const w=2/st,x=w*dt,e=1/(1+x+.48*x*x+.235*x*x*x),ch=c-t,tmp=(v+w*ch)*dt;return[t+(ch+tmp)*e,(v-w*tmp)*e]}
+
+addEventListener('pointermove',e=>{tx=e.clientX/innerWidth*2-1;ty=1-e.clientY/innerHeight*2-1});
+boot.addEventListener('click',()=>{skipped=true});
+addEventListener('keydown',e=>{
+  if(boot.classList.contains('gone'))return;
+  /* the player's own keys can't reach it while the intro is up, so full
+     screen is handed over from here and every other key skips */
+  if(e.key==='f'||e.key==='F'){window.dispatchEvent(new Event('md-fs-key'));return}
+  skipped=true;
+});
+
+function frame(now){
+  lastFrameAt=performance.now();
+  const raw=(now-last)/1000,dt=cl(raw,0,.05);last=now;      // dt clamp: no jump after tab switch
+  const k6=1-Math.exp(-dt*6);mx+=(tx-mx)*k6;my+=(ty-my)*k6;
+  let F=0,Hh=0;
+  if(phase===-1){                                           // warm-up: compile the shader, draw a frame
+    warm++;
+    /* five frames, not twelve: the compile is the first draw only, and every
+       frame of warm-up is a frame the intro is not yet animating */
+    if(warm>=5){boot.classList.add('live');phase=0;clock=0}
+  }else clock+=dt;
+  if(phase===0){
+    const k=cl(clock/DUR);
+    [pS,pV]=damp(pS,skipped?1:curve(k),pV,skipped?.25:.55,dt);
+    const p=cl(pS);
+    fill.style.width=p*100+'%';
+    /* the readouts only change when their text does — writing them every
+       frame would re-layout the HUD sixty times a second for nothing */
+    const pv=String(Math.round(p*100)).padStart(3,'0');
+    if(pv!==pc.textContent)pc.textContent=pv;
+    const label=LABELS[Math.min(3,Math.floor(p*4))];
+    if(label!==lab.textContent)lab.textContent=label;
+    if(p>.3)title.classList.add('in');
+    if(p>.995&&(k>=1||skipped)){
+      if(pending>0){                                        /* the app is still warming up */
+        if(lab.textContent!==SYNC_LABEL)lab.textContent=SYNC_LABEL;
+        /* a hold that never ends is a hang, not a loading state. The gate has
+           its own per-key deadlines (src/lib/bootGate.ts) that name the
+           straggler on the console; this is the second net, for the case
+           where the gate itself never got to run — after 4s on SYNCING the
+           intro opens regardless, because nothing may trap the player behind
+           its own splash screen */
+        /* WALL clock, not the animation clock: `dt` is clamped to 50ms a
+           frame, so on a slow GPU four seconds of clock can be twenty of
+           sitting on SYNCING. This is a patience budget, and patience is
+           measured in real seconds. */
+        if(!syncWall){
+          syncWall=now;
+          console.warn('[boot] still held on '+pending+' waitFor promise'+(pending===1?'':'s')+' — revealing the player in 4s');
+        }else if(now-syncWall>4000){
+          phase=1;tReady=clock;
+        }
+      }else{
+        phase=1;tReady=clock;lab.textContent=LABELS[4];pc.textContent='100';fill.style.width='100%';
+      }
+    }
+  }else if(phase===1){
+    if(clock-tReady>(skipped?.1:.6)){phase=2;tExit=clock;boot.classList.add('exit','ready')}
+  }else if(phase===2){
+    const u=cl((clock-tExit)/EXIT);
+    F=ease(cl(u/.55));Hh=ease(cl((u-.36)/.64));            // flood and hole overlap -> one continuous motion
+    if(u>=1){gl.clear(gl.COLOR_BUFFER_BIT);end();return}
+  }
+  gl.uniform2f(uRes,cv.width,cv.height);gl.uniform2f(uM,mx,my);
+  gl.uniform1f(uT,clock);gl.uniform1f(uP,cl(pS));gl.uniform1f(uF,F);gl.uniform1f(uH,Hh);
+  gl.drawArrays(gl.TRIANGLES,0,3);
+  raf=requestAnimationFrame(frame);
+}
+function play(first){
+  if(ONCE){try{if(sessionStorage.getItem('booted')){boot.classList.add('gone');return}}catch(e){}}
+  cancelAnimationFrame(raf);boot.className='';title.classList.remove('in');
+  skipped=false;phase=first?-1:0;warm=0;clock=0;pS=0;pV=0;syncWall=0;fill.style.width='0';pc.textContent='000';
+  resize();
+  last=performance.now();lastFrameAt=last;raf=requestAnimationFrame(frame);
+}
+play(true);
+
+/* heartbeat: an intro whose rAF chain dies (exception, GPU stall, hidden
+   window) would otherwise keep the player hidden forever — if no frame has
+   run for 2.5s, reveal the app whatever the animation was doing */
+setInterval(function(){
+  if(!finished&&performance.now()-lastFrameAt>2500){
+    try{gl.clear(gl.COLOR_BUFFER_BIT)}catch(e){}
+    end();
+  }
+},1000);
+})();
+</script>
+
+    <script type="module" id="app-main" src="/src/main.tsx"></script>
+    <script>
+      /* A blank window is the worst failure there is: it looks like the app
+         is working and it tells nobody anything. This net goes in HERE, in
+         the plain script, because it has to catch the failures that happen
+         before the app's own code runs at all — a module that will not
+         load, a module that throws while it evaluates. The app's own net
+         (src/lib/fatalError.ts) picks up everything after that. */
+      (function () {
+        function paint(title, detail) {
+          try {
+            var boot = document.getElementById('boot')
+            if (boot) boot.classList.add('gone')
+            if (document.querySelector('[data-md-fatal]')) return
+            var d = document.createElement('div')
+            d.setAttribute('data-md-fatal', '1')
+            d.setAttribute('style', 'position:fixed;inset:0;z-index:2147483647;overflow:auto;background:#12060a;color:#ffd9d9;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;padding:24px;white-space:pre-wrap;word-break:break-word')
+            var h = document.createElement('div')
+            h.setAttribute('style', 'color:#ff6b6b;font-weight:700;letter-spacing:.2em;margin-bottom:12px')
+            h.textContent = title
+            d.appendChild(h)
+            var b = document.createElement('div')
+            b.textContent = detail
+            d.appendChild(b)
+            document.body.appendChild(d)
+          } catch (e) {}
+        }
+        window.addEventListener('error', function (e) {
+          var err = e.error
+          paint('THE APP FAILED TO START', err && err.stack ? err.stack : (e.message || String(err)))
+        })
+        window.addEventListener('unhandledrejection', function (e) {
+          var r = e.reason
+          paint('A PROMISE WAS REJECTED AND NOTHING CAUGHT IT',
+            r && r.stack ? r.stack : (typeof r === 'string' ? r : JSON.stringify(r)))
+        })
+      })();
+    </script>
+    <script>
+      /* hold the boot from its very first frame: pending covers the entire
+         module-graph load, so the reveal can never open onto an unstyled
+         white page — the real gate (window.Boot.waitFor from main.tsx)
+         takes over the moment the app evaluates */
+      try {
+        var appMain = document.getElementById('app-main');
+        window.Boot.waitFor(new Promise(function (done) {
+          if (!appMain) return done();
+          appMain.addEventListener('load', done);
+          appMain.addEventListener('error', done);
+        }));
+      } catch (e) {}
+    </script>
+  </body>
+</html>

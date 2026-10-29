@@ -1,0 +1,28 @@
+# graft's local graph cache — regenerable (run `graft build`)
+/graft/
+
+# tool state
+/.freebuff/
+
+# node / build output
+node_modules/
+dist/
+
+# rust build + generated schemas
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# python
+.venv/
+__pycache__/
+
+# vendored ffmpeg binary — regenerable, 200 MB
+**/dannify/bin/
+
+# dannify runtime state (session tokens, store) — lives in %APPDATA% in real use
+**/dannify/data/
+**/dannify/downloads/
+
+# .verify screenshots — the driver scripts are tracked, the images are not
+**/.verify/*.png
+**/.verify/*.jpg
