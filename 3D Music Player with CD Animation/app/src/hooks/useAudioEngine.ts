@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { sourcesPlay } from '../features/sources/bridge'
+import { startKeepAlive, stopKeepAlive } from '../lib/keepAlive'
 
 export interface Track {
   id: number
@@ -79,6 +80,12 @@ export function useAudioEngine(tracks: Track[]) {
   })
   useEffect(() => localStorage.setItem('md-shuffle', shuffle ? '1' : '0'), [shuffle])
   useEffect(() => localStorage.setItem('md-repeat', repeat), [repeat])
+  /* a mode change invalidates the standby's pick: it was chosen under the
+     previous mode, and promoting it after the flip would play a decision
+     nobody made (the "next plays a random track" report) */
+  useEffect(() => {
+    xfArmedRef.current = null
+  }, [shuffle, repeat])
 
   const tracksRef = useRef(tracks)
   const indexRef = useRef(trackIndex)
@@ -91,6 +98,11 @@ export function useAudioEngine(tracks: Track[]) {
 
   useEffect(() => {
     tracksRef.current = tracks
+    /* a list that changed under a parked standby (delete, reorder, import)
+       can leave the armed pick pointing at a track that is no longer there —
+       drop it; the tick (or the next advance) re-arms with a correct pick */
+    const armed = xfArmedRef.current
+    if (armed && tracks[armed.idx]?.src !== armed.src) xfArmedRef.current = null
   }, [tracks])
   useEffect(() => {
     indexRef.current = trackIndex
@@ -132,10 +144,13 @@ export function useAudioEngine(tracks: Track[]) {
   /* the STANDBY: while a track plays, the track the advance would pick next
      is preloaded onto this same second element — metadata and media already
      decoded — so a switch is an element swap, not a decode wait. The armed
-     record says which index and source it holds. This is the browser
-     equivalent of an output buffer that is always full: the device never
-     waits for the decoder (see the Winamp OUT.H contract). */
-  const xfArmedRef = useRef<{ idx: number; src: string } | null>(null)
+     record says which index and source it holds AND under which mode the
+     pick was made (`shuffled`): a pick made under shuffle must never fire
+     after shuffle went off, and vice versa (that is the "next plays a
+     random track" report). This is the browser equivalent of an output
+     buffer that is always full: the device never waits for the decoder
+     (see the Winamp OUT.H contract). */
+  const xfArmedRef = useRef<{ idx: number; src: string; shuffled: boolean } | null>(null)
   const promoteStandbyRef = useRef<() => boolean>(() => false)
   const [crossfade, setCrossfadeState] = useState(() => localStorage.getItem('md-crossfade') === '1')
   const [crossfadeSec, setCrossfadeSecState] = useState(() => {
@@ -226,7 +241,6 @@ export function useAudioEngine(tracks: Track[]) {
         setPlaying(true)
         setBusy(false)
         setFailed(null)
-        watchingRef.current = false
         consecutiveErrors.current = 0
       }
       const onPause = () => setPlaying(false)
@@ -306,8 +320,8 @@ export function useAudioEngine(tracks: Track[]) {
      element is routed through it so the chrome halo, the mini equaliser and
      the BPM-reactive disc keep their spectrum data. */
 
-  /* Watch the deck's element through a capture stream — and keep trying until
-     the stream has something in it.
+  /* Watch the deck's element through a capture stream — RE-TAKEN every time
+     the element gains media.
 
      The graph is built during the boot intro, before any track is loaded, and
      an element with nothing to play hands back a capture stream with no
@@ -316,13 +330,24 @@ export function useAudioEngine(tracks: Track[]) {
      whole session — every spectrum read then said silence, whatever was
      playing. The capture is retried when the element gains media (and on
      every play), so the first refused attempt costs one frame, not the
-     session. */
-  const watchingRef = useRef(false)
+     session.
+
+     THE RE-TAKE IS ALSO THE FIX for "the bar graph reacts to some tracks
+     only": a stream captured from a media element is bound to the SOURCE the
+     element had when it was taken. After `src` changes — every track change —
+     the old stream's tracks can stop delivering, and every reading off them
+     is zeros for every track that follows. So each `playing` /
+     `loadedmetadata` drops the previous MediaStreamSource and takes a fresh
+     stream. The element itself is still never captured for real (see
+     ensureGraph): it keeps playing to the speakers on its own, its own volume
+     stays the crossfade's lever, and the analyser watches a copy of the
+     element's OWN output — not the system mixer, not the OS speaker. */
+  const deckSrcRef = useRef<MediaStreamAudioSourceNode | null>(null)
   const watchDeck = useCallback(() => {
     const el = audioRef.current
     const ctx = ctxRef.current
     const gain = gainRef.current
-    if (watchingRef.current || !el || !ctx || !gain) return
+    if (!el || !ctx || !gain) return
     const capture = el as unknown as {
       captureStream?: () => MediaStream
       webkitCaptureStream?: () => MediaStream
@@ -330,11 +355,20 @@ export function useAudioEngine(tracks: Track[]) {
     try {
       const stream = capture.captureStream?.() ?? capture.webkitCaptureStream?.()
       if (!stream || stream.getTracks().length === 0) return
-      ctx.createMediaStreamSource(stream).connect(gain)
-      watchingRef.current = true
-      /* the element's own volume is the volume now — the graph's gain is
-         only there to carry the analysis. The normalisation multiplier
-         rides along: it is part of "how loud the user asked for". */
+      /* the previous watch — same element, older source — reads silence now */
+      if (deckSrcRef.current) {
+        try {
+          deckSrcRef.current.disconnect()
+        } catch {
+          /* the node was already gone */
+        }
+      }
+      const node = ctx.createMediaStreamSource(stream)
+      node.connect(gain)
+      deckSrcRef.current = node
+      /* the element's own volume is the volume — the graph's gain is only
+         there to carry the analysis. The normalisation multiplier rides
+         along: it is part of "how loud the user asked for". */
       el.volume = Math.min(1, volumeRef.current * normGainRef.current)
     } catch (e) {
       console.error('[audio] the capture stream could not be read', e)
@@ -374,12 +408,15 @@ export function useAudioEngine(tracks: Track[]) {
      * GONE and the only way out is through the analyser and the
      * destination. So a suspended context, a failed capture, a context that
      * never resumed — any of them is silence, and the element cannot be
-     * got back.
+     * got back. It would also take the crossfade's volume lever away: the
+     * fade ramps each element's OWN volume, which only exists while the
+     * elements play natively.
      *
      * A capture stream gives the same analysis without taking the sound
      * away: the element keeps playing to the speakers on its own, and the
-     * analyser watches a copy. The music is now structurally incapable of
-     * being silenced by anything that happens in here. */
+     * analyser watches a copy (re-taken on every play — see watchDeck for
+     * why the re-take is load-bearing). The music is now structurally
+     * incapable of being silenced by anything that happens in here. */
     const capture = (el as unknown as {
       captureStream?: () => MediaStream
       webkitCaptureStream?: () => MediaStream
@@ -425,7 +462,6 @@ export function useAudioEngine(tracks: Track[]) {
     /* a suspended context is the #1 "why is nothing playing" — always resume */
     if (ctx && ctx.state !== 'running') void ctx.resume().catch(() => {})
     setFailed(null)
-      watchingRef.current = false
     const p = el.play()
     if (p) {
       void p
@@ -457,7 +493,12 @@ export function useAudioEngine(tracks: Track[]) {
      So the context is resumed on the next real interaction, whichever it
      is, and retried quietly until it takes. */
   useEffect(() => {
+    /* the keep-alive rides the same wake: the output endpoint must never
+       idle long enough to power down, or the next play pays for waking it
+       (seconds, on some driver stacks — see lib/keepAlive) */
+    startKeepAlive()
     const wake = () => {
+      startKeepAlive()
       const ctx = ctxRef.current
       if (!ctx) return
       if (ctx.state === 'running') return
@@ -482,6 +523,7 @@ export function useAudioEngine(tracks: Track[]) {
       document.removeEventListener('touchstart', wake)
       window.removeEventListener('focus', wake)
       window.clearInterval(iv)
+      stopKeepAlive()
     }
   }, [])
 
@@ -503,7 +545,6 @@ export function useAudioEngine(tracks: Track[]) {
       setTrackIndex(idx)
       setDuration(0)
       setFailed(null)
-      watchingRef.current = false
       setPlaying(false)
       reportTime(startOffset)
 
@@ -821,6 +862,9 @@ export function useAudioEngine(tracks: Track[]) {
       if (!url) return
       const ctx = ensureGraph()
       if (!ctx) return
+      /* a suspended context is silence for anything routed through the
+         graph — the tap included — so the tap never starts against one */
+      if (ctx.state !== 'running') void ctx.resume().catch(() => {})
       try {
         if (!radioAnalyserRef.current) {
           const radio = ctx.createAnalyser()
@@ -844,14 +888,22 @@ export function useAudioEngine(tracks: Track[]) {
         const kick = () => void el.play().catch(() => {})
         el.addEventListener('canplay', kick, { once: true })
         void el.play().catch(() => {})
-        /* the station refused CORS: only the tap dies, playback is untouched.
-           Nulling the analyser hands the visualiser to its deck fallback. */
+        /* the station refused CORS (or its connection limit ate the tap's
+           second connection): only the tap dies, playback is untouched.
+           Nulling the analyser hands the visualiser to its deck fallback.
+           ONE delayed retry per URL — a busy first answer is not a refusal;
+           a real refusal dies here again and stays dead. */
         el.addEventListener(
           'error',
           () => {
             if (radioTapRef.current?.el !== el) return
             radioTapRef.current = null
             radioAnalyserRef.current = null
+            if (radioTapRetriedRef.current === url) return
+            radioTapRetriedRef.current = url
+            window.setTimeout(() => {
+              if (!radioTapRef.current) tuneRadioVizRef.current(url)
+            }, 1500)
           },
           { once: true },
         )
@@ -862,6 +914,13 @@ export function useAudioEngine(tracks: Track[]) {
     },
     [ensureGraph],
   )
+  /* the tap's own error retry re-enters tuneRadioViz through a ref — the
+     callback cannot close over itself — and is capped at one attempt per URL */
+  const tuneRadioVizRef = useRef<(url: string | null) => void>(() => {})
+  const radioTapRetriedRef = useRef<string | null>(null)
+  useEffect(() => {
+    tuneRadioVizRef.current = tuneRadioViz
+  }, [tuneRadioViz])
 
   /* ── the audio tick ─────────────────────────────────────────────────────
      Runs on the same 100ms heartbeat that reports the playhead. Two jobs:
@@ -945,7 +1004,6 @@ export function useAudioEngine(tracks: Track[]) {
       durationRef.current = Number.isFinite(xf.duration) ? xf.duration : 0
       setDuration(durationRef.current)
       setTrackIndex(nextIdx)
-      watchingRef.current = false
       normGainRef.current = 1
       xfArmedRef.current = null
       /* any fade that was ramping against the old pair must stand down —
@@ -1103,7 +1161,7 @@ export function useAudioEngine(tracks: Track[]) {
         return
       }
     }
-    xfArmedRef.current = { idx, src: next.src }
+    xfArmedRef.current = { idx, src: next.src, shuffled: shuffleRef.current && list.length > 1 }
   }, [])
 
   /* ── the standby swap ───────────────────────────────────────────────────
@@ -1115,6 +1173,22 @@ export function useAudioEngine(tracks: Track[]) {
     const list = tracksRef.current
     if (!armed || !xf || !list[armed.idx]) return false
     if (xf.getAttribute('src') !== armed.src || xf.readyState < 2) return false
+    /* the armed pick must still BE the pick. Ordered mode verifies against
+       the current index: a standby armed before a delete/reorder/import can
+       point at a stranger, and promoting it is the "next jumps somewhere
+       random". Shuffle is a fresh decision on every advance, so a standby
+       armed under the OTHER mode is refused too — the plain advance re-picks
+       and re-arms, and only the swap's instant is lost. */
+    const shuffleNow = shuffleRef.current && list.length > 1
+    if (armed.shuffled !== shuffleNow) return false
+    if (!shuffleNow) {
+      let expect = indexRef.current + 1
+      if (expect >= list.length) {
+        if (repeatRef.current === 'off') return false
+        expect = 0
+      }
+      if (armed.idx !== expect) return false
+    }
     const fromEl = audioRef.current
     if (!fromEl) return false
     const baseTo = Math.min(1, volumeRef.current * normGainRef.current)

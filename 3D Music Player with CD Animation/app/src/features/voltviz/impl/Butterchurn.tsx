@@ -493,7 +493,7 @@ export function Overlay({ api }: OverlayProps) {
             >
               {names.map((n) => (
                 <option key={n} value={n}>
-                  {`${viz?.isCustom(n) ? '◆ ' : ''}${n}`}
+                  {`${viz?.isFav(n) ? '⭐ ' : ''}${viz?.isCustom(n) ? '◆ ' : ''}${n}`}
                 </option>
               ))}
             </select>

@@ -1239,25 +1239,6 @@ export default function Home() {
     setCreatorClosing(false)
   }, [])
 
-  /* auto-hide cursor after 3s of inactivity (media player behavior) */
-  const [cursorHidden, setCursorHidden] = useState(false)
-  const cursorTimerRef = useRef<number | undefined>(undefined)
-  useEffect(() => {
-    const wake = () => {
-      setCursorHidden(false)
-      window.clearTimeout(cursorTimerRef.current)
-      cursorTimerRef.current = window.setTimeout(() => setCursorHidden(true), 3000)
-    }
-    wake()
-    window.addEventListener('pointermove', wake)
-    window.addEventListener('pointerdown', wake)
-    return () => {
-      window.removeEventListener('pointermove', wake)
-      window.removeEventListener('pointerdown', wake)
-      window.clearTimeout(cursorTimerRef.current)
-    }
-  }, [])
-
   /* pre-warm the eye engine — only after the boot has exited AND the main
      thread is idle: its WebGL build (PMREM pass + texture baking) would
      otherwise land on the exact frames the shutter wipe needs, and stall
@@ -1535,7 +1516,7 @@ export default function Home() {
 
   return (
     <div
-      className={`md-root relative flex flex-col overflow-hidden bg-black text-white ${cursorHidden ? 'cursor-none' : ''}`}
+      className="md-root relative flex flex-col overflow-hidden bg-black text-white"
       onDragEnter={(e) => {
         if (!isFileDrag(e)) return
         e.preventDefault()
@@ -1730,7 +1711,11 @@ export default function Home() {
       <div className="bg-layer fx-video pointer-events-none absolute inset-0 z-[72]" style={{ boxShadow: 'inset 0 0 180px rgba(0,0,0,0.9)' }} />
 
       {/* header */}
-      <header className="relative z-40 flex items-center justify-between px-5 py-4 font-mono text-[10px] tracking-[0.25em] text-white/75 sm:px-8">
+      {/* header — ABOVE the lyrics overlay (z-60): the whole cluster is one
+          stacking context, so a z inside it is capped at the header's own
+          level, and the wallpaper colour swatch + its picker must stay
+          clickable over a full-screen lyric panel */}
+      <header className="relative z-[65] flex items-center justify-between px-5 py-4 font-mono text-[10px] tracking-[0.25em] text-white/75 sm:px-8">
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-3">
             <span className={`inline-block h-2 w-2 rounded-full ${eng.playing ? 'animate-blink bg-red-500' : 'bg-white/25'}`} />
@@ -2211,12 +2196,6 @@ export default function Home() {
               {tracklistPanel}
             </div>
           )}
-
-          <p className="mt-4 font-mono text-[9px] leading-relaxed tracking-[0.15em] text-white/30">
-            CLICK DISC TO PLAY · DRAG DISC TO SCRATCH
-            <br />
-            HOLD THE RADIO BUTTON FOR LIVE STATIONS
-          </p>
         </div>
       </main>
 

@@ -22,16 +22,17 @@ interface Props {
   onClose: () => void
 }
 
-/** VoltViz's four settings, with the labels and suffixes its own panel gives them. */
+/** VoltViz's tuning sliders, with the labels and suffixes its own panel gives
+ *  them. HUE is deliberately not offered: the palettes carry the colour
+ *  identity, and a hue slider over them read as clutter (the setting itself
+ *  stays in the settings type for the visuals that compute with it). */
 const TUNING = [
   ['sensitivity', 'SENSITIVITY', 'x'],
   ['speed', 'SPEED', 'x'],
-  ['hueShift', 'HUE', '°'],
   ['scale', 'SCALE', 'x'],
 ] as const satisfies readonly (readonly [keyof VisualizerSettings, string, string])[]
 
-const shown = (key: keyof VisualizerSettings, value: number) =>
-  key === 'hueShift' ? `${Math.round(value)}°` : `${value.toFixed(1)}x`
+const shown = (_key: keyof VisualizerSettings, value: number) => `${value.toFixed(1)}x`
 
 /**
  * Which of the shared four actually reach the selected visual. Butterchurn

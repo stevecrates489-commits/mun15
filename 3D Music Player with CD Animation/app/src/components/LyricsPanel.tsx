@@ -132,7 +132,29 @@ const WHITE_CHROME = `
     --am-lyrics-highlight-color: #ffffff !important;
     --highlight-color: #ffffff !important;
     --lyplus-text-secondary: color-mix(in srgb, #ffffff 55%, transparent) !important;
+    --lyplus-text-primary: #ffffff !important;
     --am-lyrics-glow-radius: 0px !important;
+  }
+  /* the hard CD-off guarantee, on top of the palette: plain white glyphs and
+     NOTHING else — no clipped gradient, no stroke, no shadow, no sheen. Any
+     metallic artifact that survives onto the bare stage is a bug, so this
+     face does not negotiate: the sheet is the last word in the cascade
+     (appended after every other adopted sheet) and every line is !important. */
+  .lyrics-line,
+  .lyrics-line-container {
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    background: none !important;
+    background-clip: border-box !important;
+    -webkit-background-clip: border-box !important;
+    text-shadow: none !important;
+    -webkit-text-stroke: 0 !important;
+  }
+  .lyrics-line.active,
+  .lyrics-line.active .lyrics-line-container {
+    color: #ffffff !important;
+    -webkit-text-fill-color: #ffffff !important;
+    text-shadow: none !important;
   }
 `
 

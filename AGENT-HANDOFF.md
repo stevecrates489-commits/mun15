@@ -143,7 +143,18 @@ animation; radio opens via 450ms HOLD of `button[aria-label="Radio (hold)"]`),
 save/rename), `vizcheck.mjs` (BarGraph bg-toggle pixel modes, Butterchurn
 mount), `drawercheck.mjs` (player settings in drawer), `headercheck.mjs`
 (header redesign: chip counts, TRACKLIST bar gone, footer row, scroll-to-blur
-header-only), `milkcheck.mjs` (milkdrop-preset-converter output shape).
+header-only), `milkcheck.mjs` (milkdrop-preset-converter output shape),
+`playcheck.mjs` (keep-alive: element looping through pauses, first-play /
+short-resume / 65s-resume latencies), `dragcheck.mjs` (pointer drag: ghost
+lifts + follows, origin parked, marker, order commits, click still plays,
+cleanup), `uibatch.mjs` (the 11-item batch: cursor, backdrop canvas across
+track changes, radio toggle, header z, HUE gone, hints gone, stepper
+alignment, next/prev stepping), `final5.mjs` (rendered-white lyric with CD
+off, dark select CSS, star template ships). HARNESS TRAP (found the hard way): the boot intro `#boot` overlay
+(z-index 99999, a canvas) still holds the window under the Tauri shim — its
+auto-exit gate can leave it up, and the first real pointerdown is EATEN by
+it (synthetic dispatches on the row bypass it and look fine). Dismiss it
+first: click once (e.g. 20,880) and poll until `#boot` is gone/display:none.
 
 ---
 
@@ -392,6 +403,86 @@ code must avoid setState sync in effect bodies).
       (header + list) goes to `blur(L)` + `rgba(255,255,255,0.05)`; level 0
       paints nothing (default `bg-black/45` glass). The header's own style
       block is gone.
+31. **Pause-resume delay fixed — the keep-alive** (verified by `playcheck.mjs`):
+    User report: after ~1 minute paused, PLAY took 5-6s to sound, every
+    track, every time. Cause: the Windows audio endpoint powers down when
+    nothing renders; waking it costs seconds on this driver stack. Fix:
+    `lib/keepAlive.ts` — a looping element of one second of TRUE zero
+    samples (hand-wrapped WAV, no asset), volume 0.01, started from the
+    engine's watchdog effect (mount + every interaction retry, autoplay
+    policy covered). Browser equivalent of foobar2000's silence-writing
+    output: the endpoint never idles, so resume is instant. Plain element —
+    never captured, no graph involvement, no media-session metadata.
+    Harness numbers: first play 125ms, short resume 136ms, 65s-pause
+    resume 220ms; keep-alive keeps rendering through every pause. The real
+    endpoint proof is the user's machine (headless cannot reproduce the
+    power-down itself). `keepAliveElement()` exported for the harness.
+32. **Drag-reorder rewritten — pointer drag, no HTML5 DnD** (verified by
+    `dragcheck.mjs` + `scrollcheck.mjs`): native HTML5 DnD stutters in
+    WebView2 by construction (out-of-process ghost lags the cursor;
+    dragenter throttled). PlaylistPanel now owns the drag: delegated
+    `pointerdown` on the scroll box (rows carry `data-row-index`), 5px
+    threshold keeps clicks clicks, then pointer capture + a rAF loop that
+    writes ONE translate3d per frame to a portalled ghost
+    (`.playlist-row-ghost`, fixed, pointer-events none, starts opacity 0
+    until placed) while the origin row parks as the placeholder
+    (`.playlist-row-drag-origin`). Landing marker + playlist chips
+    (`data-chip-id`) hit-tested with elementFromPoint per frame; edge
+    auto-scroll eased on the same rAF (speeds preserved ±11 × 0.25); drop
+    commits via the same `onReorder(from, to)`; the click a drag ends on
+    is suppressed (box capture listener, 250ms); body gets `row-dragging`
+    (user-select none). The scroll window extends to cover the dragged
+    slot so the row never unmounts mid-flight. TRAPS: the row entrance
+    animation (`playlist-row-in`, fill both) overrides inline transforms —
+    `animateIn` excludes `draggedIdx`; chips lost their native DnD
+    handlers (rows no longer native-drag; chip drops ride our own state).
+    Behavior, layout and tokens unchanged; only MANUAL sort + no grouping
+    reorders, as before.
+33. **11-item UI/logic batch** (verified by `uibatch.mjs` + `final5.mjs`):
+    - IDLE CURSOR HIDING removed (Home effect + `.cursor-none` CSS gone; the
+      H-key `hide-ui` cursor rule is a separate explicit feature, kept).
+    - **Capture stream is RE-TAKEN on every play** (`watchDeck`): a stream
+      captured from a media element is bound to the source it had when
+      taken — after `src` changes the old tracks stop delivering and every
+      reading is zeros ("bar graph reacts to some tracks only"). Each
+      `playing`/`loadedmetadata` drops the previous MediaStreamSource and
+      takes a fresh one (`deckSrcRef`). `watchingRef` is gone. The element
+      is STILL never captured for real — the crossfade ramps el.volume on
+      two native elements, which direct MediaElementSource capture would
+      destroy (per-element gains would be a full volume-architecture
+      rewrite; do not "fix" this back without reading the crossfade first).
+      Verified e2e: backdrop canvas paints on track 1 AND track 2.
+    - Radio: tap gets a ctx.resume() + ONE retry per URL on error
+      (`radioTapRetriedRef`; `tuneRadioVizRef` because the callback cannot
+      close over itself). The VISUAL toggle was already source-only
+      (verified: flips `md-radio-viz`, backdrop stays). CORS-refusing
+      stations are UNREADABLE by browser rule — the deck fallback freezing
+      during radio is expected, not a bug.
+    - Header raised z-40 → **z-[65]** (above the lyrics overlay's z-60): the
+      header is ONE stacking context, so the colour picker's internal
+      z-[95] was capped at 40 and lost to the lyrics.
+    - WHITE_CHROME carries a hard force block: color/fill white, no
+      background-clip, no text-shadow, no text-stroke (verified on a
+      RENDERED pinned lyric with CD off: computed white/none/0px/none).
+    - NEXT/PREV "random pick" root cause: the STANDBY (`xfArmedRef`)
+      survived shuffle flips and list edits, and promoteStandby fired the
+      stale pick. Armed records now carry `shuffled`; promote validates
+      mode + ordered-index; the tracks-sync effect and a `[shuffle,repeat]`
+      effect drop stale arms. Verified e2e incl. wrap-around.
+    - HUE slider removed from TUNING (setting stays in the type).
+    - CLICK DISC hint `<p>` removed (Home ~2215).
+    - BarGraph card: strict `grid-cols-[1fr_auto]` + fixed `w-[104px]
+      grid-cols-[24px_48px_24px]` stepper clusters (steppers align to 0px).
+    - Native select popups painted dark (index.css: color-scheme dark +
+      option bg #14161c; checked #2b3340) — the WebView2 popup was white-
+      on-white; Butterchurn options carry ⭐ for favourites.
+    - HARNESS TRAPS: `#boot.ready` is transparent + pointer-events:none but
+      display stays block — dismissing by display:none never fires, just
+      click once and move on. Adopted sheets throw on cssText/cssRules in
+      this WebView — judge styles by getComputedStyle of rendered nodes.
+      Butterchurn's factory never completes headless (no WebGL → canvas
+      stuck 300x150, api never set, Overlay card absent) — its card needs
+      source-level or rendered-style checks, not the live card.
 
 ---
 

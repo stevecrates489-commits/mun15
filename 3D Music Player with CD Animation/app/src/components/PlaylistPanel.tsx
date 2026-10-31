@@ -326,6 +326,25 @@ export default function PlaylistPanel({
   const [chipOver, setChipOver] = useState<number | null>(null)
   /* mirror of dragIndex for render — refs must not be read during render */
   const [dragging, setDragging] = useState(false)
+  /* the row that has been lifted (its slot parks as the placeholder) and
+     the ghost that flies with the cursor — see the pointer drag effect */
+  const [draggedIdx, setDraggedIdx] = useState<number | null>(null)
+  const [ghost, setGhost] = useState<{ index: number; width: number; height: number } | null>(null)
+  const ghostRef = useRef<HTMLDivElement | null>(null)
+  /* the drag effect runs listener-free of renders: it reads the latest
+     list and callbacks through refs instead of re-binding mid-drag */
+  const tracksRef = useRef(tracks)
+  useEffect(() => {
+    tracksRef.current = tracks
+  }, [tracks])
+  const onReorderRef = useRef(onReorder)
+  useEffect(() => {
+    onReorderRef.current = onReorder
+  }, [onReorder])
+  const onAddToPlaylistRef = useRef(onAddToPlaylist)
+  useEffect(() => {
+    onAddToPlaylistRef.current = onAddToPlaylist
+  }, [onAddToPlaylist])
   /* multi-select: track ids, so reordering and filtering never move a row
      out from under the selection. The anchor is the row shift-click started
      from, which is what makes a range mean "from there to here". */
@@ -420,8 +439,17 @@ export default function PlaylistPanel({
       /* overscan — 8 rows left thin blanks at the fast end of a fling; 12
          keeps a margin without making the mounted range heavy */
       const pad = 12
-      const start = Math.max(0, Math.floor(box.scrollTop / h) - pad)
-      const end = Math.min(tracks.length, Math.ceil((box.scrollTop + box.clientHeight) / h) + pad)
+      let start = Math.max(0, Math.floor(box.scrollTop / h) - pad)
+      let end = Math.min(tracks.length, Math.ceil((box.scrollTop + box.clientHeight) / h) + pad)
+      /* the dragged row's slot must stay mounted wherever the drag goes —
+         the pointer drag parks it as the placeholder and hits rows with
+         elementFromPoint, so the element cannot be allowed to unmount
+         mid-flight when auto-scroll carries the view away from it */
+      const dragged = dragIndex.current
+      if (dragged != null) {
+        start = Math.min(start, dragged)
+        end = Math.max(end, dragged + 1)
+      }
       applyWindow(start, end)
       if (!scrolledRef.current && box.scrollTop > 2) {
         scrolledRef.current = true
@@ -564,67 +592,192 @@ export default function PlaylistPanel({
     }
   }, [])
 
-  /* edge auto-scroll while dragging: a rAF ease instead of ±11px jumps per
-     native dragover (the browser fires those at its own whim — irregular
-     100-350ms apart — which reads as stutter when nudging a row toward the
-     top/bottom). Speed scales with how deep the cursor is past the edge. */
+  /* a sorted or grouped view is a view, not an order — see TrackSort */
+  const reorderable = sort === 'manual' && groupBy === 'none'
+
+  /* ── the row drag: pointer events, not HTML5 drag-and-drop ──────────────
+     Native DnD stutters here by construction: the drag ghost is composited
+     out of process and lags the cursor, and dragenter/dragover arrive at
+     the browser's own whim (irregular, throttled), so the reorder read as
+     the row fighting the UI. Instead the drag is owned entirely by this
+     panel: pointer capture on the row, a rAF loop that writes one
+     translate3d per frame to a floating ghost (compositor work only —
+     never layout), the landing marker and the playlist chips hit-tested
+     with elementFromPoint (the ghost is pointer-events: none, so the test
+     always reads the rows underneath). A 5px threshold keeps clicks
+     clicks; auto-scroll eases at the edges on the same rAF. */
   useEffect(() => {
+    if (!reorderable) return
     const box = scrollRef.current
     if (!box) return
-    let raf = 0
-    let active = false
-    let lastY = 0
-    const tick = () => {
-      if (dragIndex.current == null) {
-        active = false
-        raf = 0
-        return
-      }
-      const r = box.getBoundingClientRect()
-      let over = 0
-      if (lastY < r.top + 44) over = lastY - (r.top + 44)
-      else if (lastY > r.bottom - 44) over = lastY - (r.bottom - 44)
-      if (over) box.scrollTop += Math.max(-11, Math.min(11, over * 0.25))
-      raf = requestAnimationFrame(tick)
-    }
-    const onDragOver = (e: DragEvent) => {
-      if (dragIndex.current == null) return
-      lastY = e.clientY
-      if (!active) {
-        active = true
-        raf = requestAnimationFrame(tick)
-      }
-    }
-    box.addEventListener('dragover', onDragOver)
-    return () => {
-      box.removeEventListener('dragover', onDragOver)
-      if (raf) cancelAnimationFrame(raf)
-    }
-  }, [])
 
-  /* stable handlers — recreating them per render handed every row fresh
-     props and defeated the memo, so crossing ONE row re-rendered the whole
-     list (the drag stutter) */
-  const onDragStartAt = useCallback((i: number) => {
-    dragIndex.current = i
-    setDragging(true)
-  }, [])
-  const onDragEnterAt = useCallback((i: number) => setDragOver(i), [])
-  const onDropAt = useCallback(
-    (i: number) => {
-      onReorder(dragIndex.current, i)
+    type Drag = {
+      id: number
+      index: number
+      startX: number
+      startY: number
+      offX: number
+      offY: number
+      x: number
+      y: number
+      raf: number
+      live: boolean
+      hover: number
+      chip: number | null
+    }
+    let ptr: Drag | null = null
+    let suppressClickAt = 0
+
+    const frame = () => {
+      if (!ptr || !ptr.live) return
+      ptr.raf = 0
+      const r = box.getBoundingClientRect()
+      /* edge auto-scroll first: the scroll moves the content under the
+         cursor and the marker arithmetic below follows on the next frame.
+         Speed scales with how deep the cursor is past the edge. */
+      let over = 0
+      if (ptr.y < r.top + 44) over = ptr.y - (r.top + 44)
+      else if (ptr.y > r.bottom - 44) over = ptr.y - (r.bottom - 44)
+      if (over) box.scrollTop += Math.max(-11, Math.min(11, over * 0.25))
+
+      /* the ghost rides the cursor (the CSS keeps it at opacity 0 until
+         this loop has put it under the pointer — no flash at 0,0) */
+      if (ghostRef.current) {
+        ghostRef.current.style.transform = `translate3d(${ptr.x - ptr.offX}px, ${ptr.y - ptr.offY}px, 0)`
+        ghostRef.current.style.opacity = '1'
+      }
+
+      /* what is under the cursor: the ghost and the parked row are both
+         transparent to the test, so this reads the rows underneath */
+      const hit = document.elementFromPoint(ptr.x, ptr.y)
+      const chipEl = hit?.closest<HTMLElement>('[data-chip-id]')
+      const chip = chipEl ? Number(chipEl.dataset.chipId) : null
+      const chipNow = chip != null && Number.isFinite(chip) ? chip : null
+      if (chipNow !== ptr.chip) {
+        ptr.chip = chipNow
+        setChipOver(chipNow)
+      }
+      if (chipNow == null) {
+        const rowEl = hit?.closest<HTMLElement>('[data-row-index]')
+        const hover = rowEl ? Number(rowEl.dataset.rowIndex) : -1
+        if (hover !== ptr.hover) {
+          ptr.hover = hover
+          setDragOver(hover >= 0 ? hover : null)
+        }
+      }
+      ptr.raf = requestAnimationFrame(frame)
+    }
+
+    const lift = (d: Drag, el: HTMLElement) => {
+      const r = el.getBoundingClientRect()
+      d.offX = d.startX - r.left
+      d.offY = d.startY - r.top
+      d.live = true
+      dragIndex.current = d.index
+      try {
+        el.setPointerCapture(d.id)
+      } catch {
+        /* detached between down and lift — the window listeners carry it */
+      }
+      document.body.classList.add('row-dragging')
+      setDragging(true)
+      setDraggedIdx(d.index)
+      setDragOver(d.index)
+      setGhost({ index: d.index, width: r.width, height: r.height })
+      d.raf = requestAnimationFrame(frame)
+    }
+
+    const land = (commit: boolean) => {
+      if (!ptr) return
+      if (ptr.raf) cancelAnimationFrame(ptr.raf)
+      document.body.classList.remove('row-dragging')
+      if (commit && ptr.live) {
+        const from = dragIndex.current
+        const t = from != null ? tracksRef.current[from] : null
+        if (ptr.chip != null && t) onAddToPlaylistRef.current(ptr.chip, t.id)
+        else if (t && ptr.hover >= 0 && ptr.hover !== from) onReorderRef.current(from, ptr.hover)
+        suppressClickAt = Date.now()
+      }
       dragIndex.current = null
       setDragging(false)
+      setDraggedIdx(null)
       setDragOver(null)
-    },
-    [onReorder],
-  )
-  const onDragEndAt = useCallback(() => {
-    dragIndex.current = null
-    setDragging(false)
-    setDragOver(null)
-    setChipOver(null)
-  }, [])
+      setChipOver(null)
+      setGhost(null)
+      ptr = null
+    }
+
+    const onDown = (e: PointerEvent) => {
+      if (e.button !== 0 || e.pointerType !== 'mouse') return
+      const target = e.target instanceof Element ? e.target : null
+      const rowEl = target?.closest<HTMLElement>('[data-row-index]')
+      if (!rowEl) return
+      /* the row's own controls keep their clicks — a drag starts on the
+         row itself, never on a button living in it */
+      if (target?.closest('button, input, a, textarea')) return
+      const idx = Number(rowEl.dataset.rowIndex)
+      if (!Number.isFinite(idx)) return
+      ptr = {
+        id: e.pointerId,
+        index: idx,
+        startX: e.clientX,
+        startY: e.clientY,
+        offX: 0,
+        offY: 0,
+        x: e.clientX,
+        y: e.clientY,
+        raf: 0,
+        live: false,
+        hover: idx,
+        chip: null,
+      }
+    }
+    const onMove = (e: PointerEvent) => {
+      if (!ptr || e.pointerId !== ptr.id) return
+      ptr.x = e.clientX
+      ptr.y = e.clientY
+      if (!ptr.live) {
+        if (Math.abs(e.clientX - ptr.startX) < 5 && Math.abs(e.clientY - ptr.startY) < 5) return
+        const el = document.querySelector<HTMLElement>(`[data-row-index="${ptr.index}"]`)
+        if (el) lift(ptr, el)
+        else ptr = null
+        return
+      }
+      if (!ptr.raf) ptr.raf = requestAnimationFrame(frame)
+    }
+    const onUp = (e: PointerEvent) => {
+      if (ptr && e.pointerId === ptr.id) land(true)
+    }
+    const onCancel = (e: PointerEvent) => {
+      if (ptr && e.pointerId === ptr.id) land(false)
+    }
+    /* the click a drag ends on must not play the row it landed on */
+    const onClickCapture = (e: MouseEvent) => {
+      if (Date.now() - suppressClickAt < 250) {
+        e.stopPropagation()
+        e.preventDefault()
+      }
+    }
+
+    box.addEventListener('pointerdown', onDown)
+    window.addEventListener('pointermove', onMove, { passive: true })
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onCancel)
+    box.addEventListener('click', onClickCapture, true)
+    return () => {
+      box.removeEventListener('pointerdown', onDown)
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onCancel)
+      box.removeEventListener('click', onClickCapture, true)
+      if (ptr?.raf) cancelAnimationFrame(ptr.raf)
+      if (ptr?.live) {
+        document.body.classList.remove('row-dragging')
+        dragIndex.current = null
+      }
+      ptr = null
+    }
+  }, [reorderable])
   const onContextAt = useCallback((index: number, x: number, y: number) => {
     setCtx({ x, y, index })
   }, [])
@@ -737,9 +890,6 @@ export default function PlaylistPanel({
     return () => ro.disconnect()
   }, [])
 
-  /* a sorted or grouped view is a view, not an order — see TrackSort */
-  const reorderable = sort === 'manual' && groupBy === 'none'
-
   /* the window actually rendered: whatever the scroll has asked for, WIDENED
      during render to also hold the playing row. Widening here rather than in
      an effect keeps the current row reachable without a second commit — the
@@ -822,20 +972,7 @@ export default function PlaylistPanel({
               setCtx(null)
               onChipSelect(c.id)
             }}
-              onDragOver={(e) => {
-                if (dragging && c.id != null) {
-                  e.preventDefault()
-                  setChipOver(c.id)
-                }
-              }}
-              onDragLeave={() => setChipOver(null)}
-              onDrop={(e) => {
-                e.preventDefault()
-                const from = dragIndex.current
-                const t = from != null ? tracks[from] : null
-                setChipOver(null)
-                if (t && c.id != null) onAddToPlaylist(c.id, t.id)
-              }}
+              data-chip-id={c.id ?? undefined}
               className={`shrink-0 rounded-full border px-3 py-1.5 font-mono text-[10px] tracking-[0.16em] transition-colors duration-200 ${
                 on
                   ? 'border-white/40 bg-white/15 text-white'
@@ -1144,19 +1281,16 @@ export default function PlaylistPanel({
                 playing={playing}
                 selected={selectedIds.has(t.id)}
                 dragOver={dragOver === i && dragging}
+                lifted={draggedIdx === i}
                 reorderable={reorderable}
                 density={density}
-                animateIn={firstPaint && i < 16}
+                animateIn={firstPaint && i < 16 && i !== draggedIdx}
                 measure={k === 0 ? measureRow : undefined}
                 onClick={onRowClick}
                 onContextMenu={onContextAt}
                 onSelect={onSelect}
                 onRemove={onRemove}
                 onEditMeta={onEditMeta}
-                onDragStart={onDragStartAt}
-                onDragEnter={onDragEnterAt}
-                onDrop={onDropAt}
-                onDragEnd={onDragEndAt}
                 favourite={isFavourite(t.id)}
                 onToggleFavourite={onToggleFavourite}
                 queued={isNextUp(t.id)}
@@ -1172,6 +1306,37 @@ export default function PlaylistPanel({
             <div style={{ height: (tracks.length - view.end) * rowH }} aria-hidden />
           )}
         </div>
+
+        {/* the ghost that flies with the cursor — portalled to the body so
+            the list's scroll clipping can never cut it, positioned entirely
+            by the drag loop's translate3d (it starts off-screen; the first
+            frame puts it under the pointer). pointer-events: none, so the
+            elementFromPoint hit-test reads the rows underneath. */}
+        {ghost &&
+          createPortal(
+            <div
+              ref={ghostRef}
+              className="playlist-row-ghost grid items-center gap-3 px-3"
+              style={{ width: ghost.width, height: ghost.height, gridTemplateColumns: 'auto minmax(0, 1fr)' }}
+            >
+              <span className="grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded-[5px] border border-white/15 bg-white/5">
+                {tracks[ghost.index]?.cover ? (
+                  <img src={tracks[ghost.index].cover} alt="" className="h-full w-full object-cover" draggable={false} />
+                ) : (
+                  <span className="text-white/25">
+                    <Disc2 size={14} />
+                  </span>
+                )}
+              </span>
+              <span className="min-w-0">
+                <span className="block truncate text-[13px] text-white/90">{cleanTitle(tracks[ghost.index]?.title ?? '')}</span>
+                <span className="block truncate font-mono text-[9px] tracking-[0.18em] text-white/40">
+                  {(tracks[ghost.index]?.artist ?? '').toUpperCase()}
+                </span>
+              </span>
+            </div>,
+            document.body,
+          )}
 
         {/* the group header: pinned over the top of the list, so it reads as
             sticky without putting anything into the scrolling stream that
@@ -1489,6 +1654,7 @@ const PlaylistRow = memo(function PlaylistRow({
   playing,
   selected,
   dragOver,
+  lifted,
   reorderable,
   density,
   animateIn,
@@ -1498,10 +1664,6 @@ const PlaylistRow = memo(function PlaylistRow({
   onSelect,
   onRemove,
   onEditMeta,
-  onDragStart,
-  onDragEnter,
-  onDrop,
-  onDragEnd,
   favourite,
   onToggleFavourite,
   queued,
@@ -1517,6 +1679,7 @@ const PlaylistRow = memo(function PlaylistRow({
   playing: boolean
   selected: boolean
   dragOver: boolean
+  lifted: boolean
   reorderable: boolean
   density: RowDensity
   animateIn: boolean
@@ -1526,10 +1689,6 @@ const PlaylistRow = memo(function PlaylistRow({
   onSelect: (i: number) => void
   onRemove: (i: number) => void
   onEditMeta: (i: number, anchor: DOMRect) => void
-  onDragStart: (i: number) => void
-  onDragEnter: (i: number) => void
-  onDrop: (i: number) => void
-  onDragEnd: () => void
   favourite: boolean
   onToggleFavourite: (id: number) => void
   queued: boolean
@@ -1586,22 +1745,8 @@ const PlaylistRow = memo(function PlaylistRow({
       role="button"
       tabIndex={0}
       data-active={active ? 'true' : undefined}
+      data-row-index={index}
       title={`${track.artist} — ${track.title}${track.genre ? `  ·  ${track.genre}` : ''}`}
-      draggable={reorderable}
-      onDragStart={(e) => {
-        if (!reorderable) return
-        e.dataTransfer.effectAllowed = 'move'
-        onDragStart(index)
-      }}
-      onDragEnter={() => {
-        if (reorderable) onDragEnter(index)
-      }}
-      onDragOver={(e) => e.preventDefault()}
-      onDrop={(e) => {
-        e.preventDefault()
-        if (reorderable) onDrop(index)
-      }}
-      onDragEnd={onDragEnd}
       onClick={(e) => rowClick(index, e)}
       onContextMenu={(e) => {
         e.preventDefault()
@@ -1614,8 +1759,8 @@ const PlaylistRow = memo(function PlaylistRow({
         }
       }}
       style={enterDelay && animateIn ? { animationDelay: `${enterDelay}ms` } : undefined}
-      className={`playlist-row ${animateIn ? 'playlist-row-in ' : ''}group relative w-full border-b border-white/[0.07] px-3 text-left transition-colors duration-300 ${
-        reorderable ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'
+      className={`playlist-row ${animateIn ? 'playlist-row-in ' : ''}${lifted ? 'playlist-row-drag-origin ' : ''}group relative w-full border-b border-white/[0.07] px-3 text-left transition-colors duration-300 ${
+        reorderable ? 'cursor-grab' : 'cursor-pointer'
       } ${active ? 'playlist-row-active' : 'hover:bg-white/[0.05]'} ${
         selected && !active ? 'playlist-row-selected' : ''
       } ${dragOver ? 'bg-white/[0.04]' : ''} ${compact ? 'grid py-2' : 'grid py-3'}`}

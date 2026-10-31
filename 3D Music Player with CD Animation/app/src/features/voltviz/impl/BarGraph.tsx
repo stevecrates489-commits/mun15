@@ -369,15 +369,14 @@ export function Overlay({ api }: OverlayProps) {
             ))}
           </div>
 
-          {/* one shared grid for every row — a fixed label column (wide
-              enough for the longest label, SHOW BACKGROUND, so it never
-              wraps into the controls) and the controls right-aligned in the
-              same column, so BARS, INTENSITY and SHOW BACKGROUND line up
-              perfectly horizontally AND their [-][value][+] clusters sit in
-              identical positions row over row */}
-          <div className="grid grid-cols-[92px_1fr] items-center gap-x-2 gap-y-2">
+          {/* one strict grid for every row: labels in a flexible left
+              column, controls in a right column of FIXED width, so the
+              [-][value][+] clusters sit in one perfect vertical line row
+              over row (a flex `justify-end` let each row's cluster land
+              wherever its content put it) */}
+          <div className="grid grid-cols-[1fr_auto] items-center gap-x-2 gap-y-2">
             <span className="font-mono text-[8px] tracking-[0.15em] text-white/45">BARS</span>
-            <div className="flex items-center justify-end gap-1">
+            <div className="grid w-[104px] grid-cols-[24px_48px_24px] items-center justify-items-center gap-1">
               <button className={stepBtn} onClick={() => stepBars(-1)} aria-label="Fewer bars">
                 −
               </button>
@@ -388,7 +387,7 @@ export function Overlay({ api }: OverlayProps) {
             </div>
 
             <span className="font-mono text-[8px] tracking-[0.15em] text-white/45">INTENSITY</span>
-            <div className="flex items-center justify-end gap-1">
+            <div className="grid w-[104px] grid-cols-[24px_48px_24px] items-center justify-items-center gap-1">
               <button
                 className={stepBtn}
                 onClick={() => setIntensity((v) => Math.max(0.1, Math.round((v - 0.1) * 10) / 10))}
@@ -414,7 +413,7 @@ export function Overlay({ api }: OverlayProps) {
             <span className="font-mono text-[8px] tracking-[0.15em] text-white/45">
               SHOW BACKGROUND
             </span>
-            <div className="flex items-center justify-end">
+            <div className="grid w-[104px] justify-items-end">
               <button
                 onClick={() => setBg((o) => !o)}
                 aria-pressed={bg}
