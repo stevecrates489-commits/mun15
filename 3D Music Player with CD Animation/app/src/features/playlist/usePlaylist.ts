@@ -184,6 +184,22 @@ export function useDuration(src: string, enabled = true) {
   return d
 }
 
+/** The total length of a view, from the durations already probed. The header's
+ * count row shows it once every track in the view is known — rows probe as
+ * they scroll into view, so it fills in without ever starting reads itself. */
+export function durationStats(srcs: readonly string[]): { known: number; total: number } {
+  let known = 0
+  let total = 0
+  for (const src of srcs) {
+    const d = durationCache.get(src) ?? 0
+    if (d > 0) {
+      known += 1
+      total += d
+    }
+  }
+  return { known, total }
+}
+
 export function usePlaylist(engRef: RefObject<PlaylistEngine | null>) {
   const [localTracks, setLocalTracks] = useState<Track[]>([])
   const tracksRef = useRef(localTracks)

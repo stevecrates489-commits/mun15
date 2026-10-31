@@ -14,12 +14,13 @@ import {
   Play,
   Plus,
   Search,
+  Settings2,
   Trash2,
   Upload,
   X,
 } from 'lucide-react'
 import type { Track } from '../hooks/useAudioEngine'
-import { FAVOURITES_FOLDER_ID, type PlaylistFolder } from '../features/playlist/usePlaylists'
+import { DOWNLOADS_FOLDER_ID, FAVOURITES_FOLDER_ID, type PlaylistFolder } from '../features/playlist/usePlaylists'
 import TrackMetaEditor from './TrackMetaEditor'
 
 interface Props {
@@ -54,6 +55,55 @@ interface Props {
      and from there can never disagree */
   isNextUp: (id: number) => boolean
   onToggleNext: (id: number) => void
+  /* player settings — crossfade + volume normalisation. The engine owns the
+     state; the drawer is presentational. */
+  playerSettings: { crossfade: boolean; crossfadeSec: number; normalize: boolean }
+  onPlayerSetting: (key: 'crossfade' | 'crossfadeSec' | 'normalize', value: number | boolean) => void
+  /* Accent from Art — the UI (seekbar, active row, progress line) wears the
+     playing track's colours, extracted from its cover. The state lives in
+     Home beside the other display choices; this is the switch. */
+  accentArt: boolean
+  onAccentArt: (v: boolean) => void
+}
+
+/* Glass quality (item: "be careful with backdrop-filter"). A blur is
+   re-evaluated against its backdrop whenever the backdrop changes, and a live
+   wallpaper changes it every frame — so this one switch trades the frosted
+   panes for their flat dark fills across the whole app. The governor drops
+   the same thing automatically when frames go bad; this is for the user who
+   would rather keep them anyway. */
+function GlassSwitch() {
+  const [on, setOn] = useState(() => localStorage.getItem('md-glass') !== 'off')
+  useEffect(() => {
+    document.documentElement.dataset.glass = on ? 'on' : 'off'
+    localStorage.setItem('md-glass', on ? 'on' : 'off')
+  }, [on])
+  return (
+    <div className="mb-3">
+      <div className="mb-1 flex items-center justify-between">
+        <span className="font-mono text-[8px] tracking-[0.2em] text-white/35">GLASS PANELS</span>
+        <span className="font-mono text-[8px] text-white/40">{on ? 'BLURRED' : 'SOLID'}</span>
+      </div>
+      <div className="grid grid-cols-2 gap-1.5">
+        <button
+          onClick={() => setOn(true)}
+          className={`rounded-lg py-1.5 font-mono text-[9px] tracking-[0.15em] transition ${
+            on ? 'bg-white/90 text-black' : 'border border-white/10 bg-white/[0.03] text-white/50 hover:border-white/25 hover:text-white'
+          }`}
+        >
+          BLURRED
+        </button>
+        <button
+          onClick={() => setOn(false)}
+          className={`rounded-lg py-1.5 font-mono text-[9px] tracking-[0.15em] transition ${
+            !on ? 'bg-white/90 text-black' : 'border border-white/10 bg-white/[0.03] text-white/50 hover:border-white/25 hover:text-white'
+          }`}
+        >
+          SOLID · FAST
+        </button>
+      </div>
+    </div>
+  )
 }
 
 const durationCache = new Map<string, number>()
@@ -155,8 +205,14 @@ export default function PlaylistDrawer({
   onToggleFavourite,
   isNextUp,
   onToggleNext,
+  playerSettings,
+  onPlayerSetting,
+  accentArt,
+  onAccentArt,
 }: Props) {
   const [closing, setClosing] = useState(false)
+  /* the player-settings section: collapsed until the header's gear asks */
+  const [psOpen, setPsOpen] = useState(false)
   const [activeFolderId, setActiveFolderId] = useState<number | null>(null)
   /* dedicated playlist-level editor (rename + poster) — opened from the
      playlists list row, NOT from inside an opened playlist */
@@ -512,6 +568,21 @@ export default function PlaylistDrawer({
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
+            {/* player settings — crossfade + volume normalisation live here,
+                in a section that unfolds under the header rail */}
+            <button
+              onClick={() => setPsOpen((o) => !o)}
+              aria-label="Player settings"
+              aria-expanded={psOpen}
+              title="Player settings — crossfade, volume normalisation"
+              className={`grid h-7 w-7 place-items-center rounded-[9px] border transition-all duration-200 active:scale-95 ${
+                psOpen
+                  ? 'border-emerald-300/45 bg-emerald-400/10 text-emerald-200'
+                  : 'border-white/10 bg-white/[0.04] text-white/55 hover:border-white/30 hover:bg-white/[0.09] hover:text-white'
+              }`}
+            >
+              <Settings2 size={13} />
+            </button>
             <button
               onClick={() => {
                 /* a small + in the header, not a dialog: the playlist is
@@ -538,6 +609,106 @@ export default function PlaylistDrawer({
           <span className="pointer-events-none absolute inset-x-4 bottom-0 h-px bg-gradient-to-r from-transparent via-white/25 to-transparent" />
           <span className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-b from-transparent to-black/25" />
         </div>
+
+        {/* player settings — a section of the drawer, in its own glass language:
+            crossfade blends a track's end into the next, normalisation evens
+            out loud and quiet records */}
+        {psOpen && (
+          <div className="mx-3 mb-3 rounded-[14px] border border-white/10 bg-gradient-to-br from-white/[0.055] to-white/[0.02] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.07),0_6px_20px_rgba(0,0,0,0.4)]">
+            <div className="mb-2 font-mono text-[8px] tracking-[0.28em] text-white/45">PLAYER SETTINGS</div>
+
+            <div className="flex items-center justify-between gap-2 py-1">
+              <span className="font-mono text-[9px] tracking-[0.15em] text-white/75">CROSSFADE</span>
+              <button
+                aria-label="Toggle crossfade"
+                aria-pressed={playerSettings.crossfade}
+                onClick={() => onPlayerSetting('crossfade', !playerSettings.crossfade)}
+                className={`relative h-4 w-8 shrink-0 rounded-full transition-colors ${
+                  playerSettings.crossfade ? 'bg-emerald-400/80' : 'bg-white/15'
+                }`}
+              >
+                <span
+                  className="absolute top-0.5 h-3 w-3 rounded-full bg-white transition-all"
+                  style={{ left: playerSettings.crossfade ? 18 : 2 }}
+                />
+              </button>
+            </div>
+            <div className="mb-1 flex items-center gap-1.5">
+              {[0, 3, 5, 8].map((s) => (
+                <button
+                  key={s}
+                  onClick={() => onPlayerSetting('crossfadeSec', s)}
+                  aria-pressed={playerSettings.crossfadeSec === s}
+                  title={s === 0 ? 'No crossfade' : `${s}-second blend`}
+                  className={`flex-1 rounded-md py-1 font-mono text-[8px] tracking-[0.08em] transition ${
+                    playerSettings.crossfadeSec === s
+                      ? 'text-black'
+                      : 'border border-white/10 bg-white/[0.03] text-white/50 hover:border-white/25 hover:text-white'
+                  }`}
+                  style={playerSettings.crossfadeSec === s ? { background: METAL, boxShadow: METAL_SHADOW } : undefined}
+                >
+                  {s}s
+                </button>
+              ))}
+            </div>
+            <p className="mb-2 font-mono text-[7px] leading-relaxed tracking-[0.1em] text-white/25">
+              A TRACK'S END BLENDS INTO THE NEXT ONE'S START.
+            </p>
+
+            <div className="flex items-center justify-between gap-2 py-1">
+              <span className="min-w-0 font-mono text-[9px] leading-tight tracking-[0.15em] text-white/75">
+                NORMALIZE VOLUME
+              </span>
+              <button
+                aria-label="Toggle volume normalisation"
+                aria-pressed={playerSettings.normalize}
+                onClick={() => onPlayerSetting('normalize', !playerSettings.normalize)}
+                className={`relative h-4 w-8 shrink-0 rounded-full transition-colors ${
+                  playerSettings.normalize ? 'bg-emerald-400/80' : 'bg-white/15'
+                }`}
+              >
+                <span
+                  className="absolute top-0.5 h-3 w-3 rounded-full bg-white transition-all"
+                  style={{ left: playerSettings.normalize ? 18 : 2 }}
+                />
+              </button>
+            </div>
+            <p className="mb-2 font-mono text-[7px] leading-relaxed tracking-[0.1em] text-white/25">
+              {playerSettings.normalize
+                ? 'A QUIET TRACK IS LIFTED, A LOUD ONE LEFT — SAME PERCEIVED LOUDNESS.'
+                : 'EVEN OUT LOUD AND QUIET TRACKS AUTOMATICALLY.'}
+            </p>
+
+            {/* display choices that belong to the PLAYER, not the wallpaper:
+                how the panes are painted, and whose colours the interface
+                wears. Both used to sit in the wallpaper panel. */}
+            <GlassSwitch />
+
+            <div className="flex items-center justify-between gap-2 py-1">
+              <span className="min-w-0 font-mono text-[9px] leading-tight tracking-[0.15em] text-white/75">
+                ACCENT FROM ART
+              </span>
+              <button
+                aria-label="Tint the interface with the playing track's colours"
+                aria-pressed={accentArt}
+                onClick={() => onAccentArt(!accentArt)}
+                className={`relative h-4 w-8 shrink-0 rounded-full transition-colors ${
+                  accentArt ? 'bg-emerald-400/80' : 'bg-white/15'
+                }`}
+              >
+                <span
+                  className="absolute top-0.5 h-3 w-3 rounded-full bg-white transition-all"
+                  style={{ left: accentArt ? 18 : 2 }}
+                />
+              </button>
+            </div>
+            <p className="font-mono text-[7px] leading-relaxed tracking-[0.1em] text-white/25">
+              {accentArt
+                ? 'THE SEEKBAR AND THE PLAYING ROW WEAR THE COVER’S COLOURS.'
+                : 'THE INTERFACE STAYS ON THE DECK’S OWN COLOURS.'}
+            </p>
+          </div>
+        )}
 
         {/* keyed on the open playlist: entering/leaving a folder remounts this
             view, which replays the slide-in and lets every row stagger in */}
@@ -735,15 +906,20 @@ export default function PlaylistDrawer({
                                   {it.label}
                                 </button>
                               ))}
-                              <button
-                                className="flex w-full items-center gap-2 border-t border-white/10 px-2.5 py-1.5 text-left font-mono text-[9px] tracking-[0.15em] text-rose-300/70 transition hover:bg-white/10 hover:text-rose-300"
-                                onClick={() => {
-                                  setFolderMenuId(null)
-                                  removeFolderAnimated(f.id)
-                                }}
-                              >
-                                DELETE
-                              </button>
+                              {/* Downloads Online is a system playlist — the
+                                  download sync files into it by id, so the
+                                  delete option does not exist for it */}
+                              {f.id !== DOWNLOADS_FOLDER_ID && (
+                                <button
+                                  className="flex w-full items-center gap-2 border-t border-white/10 px-2.5 py-1.5 text-left font-mono text-[9px] tracking-[0.15em] text-rose-300/70 transition hover:bg-white/10 hover:text-rose-300"
+                                  onClick={() => {
+                                    setFolderMenuId(null)
+                                    removeFolderAnimated(f.id)
+                                  }}
+                                >
+                                  DELETE
+                                </button>
+                              )}
                             </div>
                           )}
                         </span>
@@ -805,14 +981,18 @@ export default function PlaylistDrawer({
                 >
                   <Upload size={12} />
                 </button>
-                <button
-                  onClick={() => activeFolder && removeFolderAnimated(activeFolder.id)}
-                  title="Delete playlist"
-                  aria-label="Delete playlist"
-                  className="grid h-9 w-9 place-items-center rounded-full border border-white/10 bg-white/[0.04] text-white/40 transition-all duration-200 hover:border-red-400/40 hover:bg-red-500/10 hover:text-red-300 active:scale-95"
-                >
-                  <Trash2 size={12} />
-                </button>
+                {/* same rule in the open-folder view: the system playlist
+                    carries no delete button at all */}
+                {activeFolder.id !== DOWNLOADS_FOLDER_ID && (
+                  <button
+                    onClick={() => activeFolder && removeFolderAnimated(activeFolder.id)}
+                    title="Delete playlist"
+                    aria-label="Delete playlist"
+                    className="grid h-9 w-9 place-items-center rounded-full border border-white/10 bg-white/[0.04] text-white/40 transition-all duration-200 hover:border-red-400/40 hover:bg-red-500/10 hover:text-red-300 active:scale-95"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                )}
               </div>
 
               <div className="relative mb-3">

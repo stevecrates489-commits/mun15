@@ -15,6 +15,7 @@ import {
   Pencil,
   Play,
   Plus,
+  RefreshCw,
   Rows3,
   Search,
   Trash2,
@@ -23,7 +24,8 @@ import {
   X,
 } from 'lucide-react'
 import { cleanTitle } from '../lib/utils'
-import { fmt, useDuration } from '../features/playlist/usePlaylist'
+import { durationStats, fmt, useDuration } from '../features/playlist/usePlaylist'
+import { DOWNLOADS_FOLDER_ID } from '../features/playlist/usePlaylists'
 import { type SubscribeTime, type Track } from '../hooks/useAudioEngine'
 
 /** How the list is ordered. `manual` is the order the user arranged, so it
@@ -45,9 +47,6 @@ const SORT_LABELS: Record<TrackSort, string> = {
 
 interface Props {
   tracks: Track[]
-  /* the playlist being viewed — shown beside the count so the main list
-     always says which source it is mirroring */
-  viewName: string
   trackIndex: number
   playing: boolean
   duration: number
@@ -77,8 +76,9 @@ interface Props {
   isNextUp: (id: number) => boolean
   onToggleNext: (i: number) => void
   /* quick-switch chips above the list — switch the viewed playlist without
-     opening the drawer at all (the drawer is then only for managing) */
-  chips: { id: number | null; name: string }[]
+     opening the drawer at all (the drawer is then only for managing). Each
+     chip carries its view's track count for its badge. */
+  chips: { id: number | null; name: string; count?: number }[]
   activeChipId: number | null
   onChipSelect: (id: number | null) => void
   onNewChip: () => void
@@ -93,6 +93,14 @@ interface Props {
   playlists: { id: number; name: string; trackIds: number[] }[]
   onAddToPlaylist: (folderId: number, trackId: number) => void
   onNewPlaylistWith: (trackId: number) => void
+  /* shown only while the Downloads Online view is active: one click asks the
+     extension for everything finished since the last sync pass */
+  onRefreshDownloads?: () => void
+  /* true while that ask is in flight — the button spins instead of stacking */
+  refreshingDownloads?: boolean
+  /* what the last pass brought ("+2 ADDED" / "UP TO DATE"), shown briefly
+     beside the button so a click is never read as a dead one */
+  refreshNote?: string | null
 }
 
 /* ---- the menus -------------------------------------------------------
@@ -212,7 +220,6 @@ function FloatingMenu({
    feature hook. */
 export default function PlaylistPanel({
   tracks,
-  viewName,
   trackIndex,
   playing,
   duration,
@@ -246,9 +253,73 @@ export default function PlaylistPanel({
   playlists,
   onAddToPlaylist,
   onNewPlaylistWith,
+  onRefreshDownloads,
+  refreshingDownloads = false,
+  refreshNote = null,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const smoothRef = useRef<{ target: number; raf: number } | null>(null)
+
+  /* ---- the chips row's edge arrows ----
+     The row pans; the playlists do not change. The left arrow exists only
+     once the row has been scrolled right (chips hidden behind it), the right
+     one only while chips are still hidden ahead — and when everything fits,
+     neither is in the DOM. Reads are coalesced to one rAF, like the list's
+     own scroll pass. */
+  const chipsRef = useRef<HTMLDivElement>(null)
+  const [chipArrows, setChipArrows] = useState({ left: false, right: false })
+  useEffect(() => {
+    const box = chipsRef.current
+    if (!box) return
+    let raf = 0
+    const read = () => {
+      raf = 0
+      setChipArrows({
+        left: box.scrollLeft > 4,
+        right: box.scrollLeft + box.clientWidth < box.scrollWidth - 4,
+      })
+    }
+    const schedule = () => {
+      if (!raf) raf = requestAnimationFrame(read)
+    }
+    schedule()
+    box.addEventListener('scroll', schedule, { passive: true })
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(schedule)
+    ro?.observe(box)
+    return () => {
+      box.removeEventListener('scroll', schedule)
+      ro?.disconnect()
+      if (raf) cancelAnimationFrame(raf)
+    }
+  }, [chips])
+  const panChips = useCallback((dir: number) => {
+    chipsRef.current?.scrollBy({ left: dir * 260, behavior: 'smooth' })
+  }, [])
+
+  /* ---- scroll-to-blur, HEADER ONLY ----
+     The wheel over the chips/search region tunes the header's own blur
+     (0–20px); preventDefault keeps that wheel from scrolling anything else.
+     The listener lives on the header container alone — the wheel over the
+     rows never reaches it, so the list scrolls exactly as before. */
+  const headerRef = useRef<HTMLDivElement>(null)
+  const [headerBlur, setHeaderBlur] = useState(0)
+  useEffect(() => {
+    const el = headerRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault()
+      const step = e.deltaY > 0 ? -3 : 3
+      setHeaderBlur((b) => Math.round(Math.min(20, Math.max(0, b + step)) * 10) / 10)
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [])
+
+  /* the view's total length, from durations the rows have already probed */
+  const durStats = useMemo(
+    () => durationStats(tracks.map((t) => t.src)),
+    [tracks],
+  )
   const dragIndex = useRef<number | null>(null)
   const [dragOver, setDragOver] = useState<number | null>(null)
   /* which chip is under the dragged row */
@@ -335,13 +406,20 @@ export default function PlaylistPanel({
     [rowH],
   )
 
-  /* keep the window under the thumb as the list scrolls */
+  /* keep the window under the thumb as the list scrolls. Coalesced to ONE
+     rAF like the resize pass below: scroll events can arrive more than once
+     per frame, and each one that moved the window used to re-render the
+     whole mounted range — the lag on a fast fling through a big library. */
   useEffect(() => {
     const box = scrollRef.current
     if (!box) return
+    let raf = 0
     const update = () => {
+      raf = 0
       const h = rowH || 1
-      const pad = 8
+      /* overscan — 8 rows left thin blanks at the fast end of a fling; 12
+         keeps a margin without making the mounted range heavy */
+      const pad = 12
       const start = Math.max(0, Math.floor(box.scrollTop / h) - pad)
       const end = Math.min(tracks.length, Math.ceil((box.scrollTop + box.clientHeight) / h) + pad)
       applyWindow(start, end)
@@ -350,8 +428,12 @@ export default function PlaylistPanel({
         setFirstPaint(false)
       }
     }
+    const onScroll = () => {
+      if (raf) return
+      raf = requestAnimationFrame(update)
+    }
     update()
-    box.addEventListener('scroll', update, { passive: true })
+    box.addEventListener('scroll', onScroll, { passive: true })
     /* the list is flex-1 now, so it also grows and shrinks with the WINDOW —
        and that never fires a scroll event. Without this the rows below the
        old window never mounted and a resized list showed blank space.
@@ -360,18 +442,14 @@ export default function PlaylistPanel({
        frame, and each pass sets state. It is also only ever read against a
        container whose height does NOT depend on how many rows are mounted —
        a content-sized one fed its own output straight back in. */
-    let raf = 0
     const onResize = () => {
       if (raf) return
-      raf = requestAnimationFrame(() => {
-        raf = 0
-        if (scrollRef.current === box) update()
-      })
+      raf = requestAnimationFrame(update)
     }
     const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(onResize)
     ro?.observe(box)
     return () => {
-      box.removeEventListener('scroll', update)
+      box.removeEventListener('scroll', onScroll)
       ro?.disconnect()
       if (raf) cancelAnimationFrame(raf)
     }
@@ -407,6 +485,7 @@ export default function PlaylistPanel({
   /* scroll so row `i` sits in the middle of the list — arithmetic, not
      element rects, because with a window over the rows the element usually
      does not exist yet when this is asked for */
+  const lastCenteredIdRef = useRef<number | null>(null)
   const centerOn = useCallback(
     (i: number) => {
       const box = scrollRef.current
@@ -436,6 +515,14 @@ export default function PlaylistPanel({
 
   useEffect(() => {
     if (trackIndex < 0) return
+    /* GUARD: re-center only when the SONG actually changes. The effect's
+     * dependencies include `centerOn` (rebuilt when rowH is re-measured or
+     * the list length changes) — both can happen mid-scroll, and re-running
+     * then yanked the view to the active row: the "jerk backward" while
+     * flinging through a long library. An unchanged id means the user owns
+     * the scroll position; leave it exactly where it is. */
+    if (lastCenteredIdRef.current === activeTrackId) return
+    lastCenteredIdRef.current = activeTrackId
     /* the row may not be in the DOM at all — a window over 5,000 rows usually
        does not contain it. The window itself is widened during render (see
        `view` below); this only scrolls once those spacers exist. */
@@ -537,6 +624,9 @@ export default function PlaylistPanel({
     setDragging(false)
     setDragOver(null)
     setChipOver(null)
+  }, [])
+  const onContextAt = useCallback((index: number, x: number, y: number) => {
+    setCtx({ x, y, index })
   }, [])
 
   /* a plain click plays and clears the selection; the modifiers build one */
@@ -650,24 +740,76 @@ export default function PlaylistPanel({
   /* a sorted or grouped view is a view, not an order — see TrackSort */
   const reorderable = sort === 'manual' && groupBy === 'none'
 
-  /* the window actually rendered: whatever the scroll has asked for, widened
-     during render to always include the playing row. Widening here rather
-     than in an effect keeps the current row reachable without a second
-     commit — the old code scrolled a row that was not in the DOM, found
-     nothing, and left the list showing rows nobody asked for. */
-  const view =
-    trackIndex >= 0 && (trackIndex < win.start || trackIndex >= win.end)
-      ? { start: Math.max(0, Math.min(trackIndex - 12, Math.max(0, tracks.length - 80))), end: Math.min(tracks.length, trackIndex + 24) }
-      : win
+  /* the window actually rendered: whatever the scroll has asked for, WIDENED
+     during render to also hold the playing row. Widening here rather than in
+     an effect keeps the current row reachable without a second commit — the
+     old code scrolled a row that was not in the DOM, found nothing, and left
+     the list showing rows nobody asked for.
+
+     The widened range must be the UNION of the scroll window and the playing
+     row's neighbourhood, never a replacement for it: the rows a replacement
+     drops are not drawn, but their height still goes into the spacer below
+     the list, so scrolling past them landed in a screenful of nothing. And
+     when the playing row is thousands of rows away, mounting everything in
+     between is worse than not having it — there the scroll window simply
+     wins, and the row is mounted again when it scrolls into reach (or when a
+     track change centres on it). */
+  const view = useMemo(() => {
+    if (trackIndex < 0 || (trackIndex >= win.start && trackIndex < win.end)) return win
+    const start = Math.min(win.start, Math.max(0, trackIndex - 12))
+    const end = Math.max(win.end, Math.min(tracks.length, trackIndex + 24))
+    if (end - start > 240) return win
+    return { start, end }
+  }, [win, trackIndex, tracks.length])
   const head = runs.length > 0 ? groupAt(view.start) : ''
   const headRun = head ? runs.find((r) => r.key === head) : null
 
   return (
-    <div className="glass-panel fx-blur mt-6 flex min-h-[200px] flex-1 flex-col overflow-hidden rounded-xl border border-white/10 bg-black/45 shadow-[0_12px_44px_rgba(0,0,0,0.5)] backdrop-blur-[20px]">
+    <div
+      className="glass-panel fx-blur mt-6 flex min-h-[200px] flex-1 flex-col overflow-hidden rounded-xl border border-white/10 bg-black/45 shadow-[0_12px_44px_rgba(0,0,0,0.5)] backdrop-blur-[20px]"
+      style={
+        headerBlur > 0
+          ? {
+              /* the WHOLE panel frosts, not just the header: the wheel over
+                 the header tunes one level (0–20) and the ROOT's background
+                 and blur follow it — header and list reveal the wallpaper
+                 together. Level 0 paints nothing: the default glass below. */
+              backdropFilter: `blur(${headerBlur}px)`,
+              WebkitBackdropFilter: `blur(${headerBlur}px)`,
+              backgroundColor: 'rgba(255, 255, 255, 0.05)',
+            }
+          : undefined
+      }
+    >
+      {/* the header: chips, then the search/sort row, then the view's numbers —
+          one region whose transparency is tuned by SCROLLING ON IT. The wheel
+          over the header adjusts its blur (0–20px); the wheel over the list
+          below is the list's own scrolling and is never touched. */}
+      <div
+        ref={headerRef}
+        className="relative"
+      >
       {/* quick-switch: every playlist one click away, right above the list.
           While a row is being dragged they become drop targets too — drag a
-          track onto a chip and it lands in that playlist. */}
-      <div className="flex items-center gap-2 overflow-x-auto border-b border-white/10 px-3 py-2 [scrollbar-width:none]">
+          track onto a chip and it lands in that playlist. When the row
+          overflows, edge arrows pan it: the left one only exists once the
+          row has actually been scrolled right, and neither shows when the
+          chips all fit. Each chip wears its view's count. */}
+      <div className="relative flex items-center border-b border-white/10">
+        {chipArrows.left && (
+          <button
+            onClick={() => panChips(-1)}
+            aria-label="Scroll playlists left"
+            title="More playlists behind"
+            className="absolute left-1 z-10 grid h-6 w-6 place-items-center rounded-full border border-white/15 bg-black/75 text-white/60 backdrop-blur-sm transition hover:border-white/40 hover:text-white"
+          >
+            <ChevronLeft size={11} />
+          </button>
+        )}
+        <div
+          ref={chipsRef}
+          className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto px-3 py-2 [scrollbar-width:none]"
+        >
         {chips.map((c) => {
           const on = c.id === activeChipId
           const dropOn = dragging && chipOver === c.id && c.id != null
@@ -702,6 +844,9 @@ export default function PlaylistPanel({
               title={c.id == null ? 'Show the whole library' : `Show ${c.name} — drop a track to add it`}
             >
               {c.name}
+              {c.count != null && (
+                <span className="ml-1.5 tabular-nums text-white/45">{c.count}</span>
+              )}
             </button>
           )
         })}
@@ -713,39 +858,16 @@ export default function PlaylistPanel({
         >
           <Plus size={11} />
         </button>
-      </div>
-
-      {/* the subheader — which list this is, and what boot/import is doing.
-          Its own row, so the controls below are one unbroken line */}
-      <div className="flex min-w-0 items-center gap-2 overflow-hidden border-b border-white/10 px-3 py-2.5">
-        <span className="min-w-0 shrink-0 font-mono text-[10px] tracking-[0.3em] text-white/60">
-          TRACKLIST · {String(tracks.length).padStart(2, '0')}
-          <span className="ml-2 inline-block max-w-[130px] truncate align-bottom tracking-[0.2em] text-white/40">
-            {viewName}
-          </span>
-        </span>
-        {boot === 'loading' && (
-          <span className="flex shrink-0 items-center gap-1.5 font-mono text-[9px] tracking-[0.15em] text-white/40">
-            <Disc2 size={10} className="animate-spin" style={{ animationDuration: '1.6s' }} />
-            LOADING
-          </span>
-        )}
-        {boot === 'ready' && (
-          <span className="ready-fade flex shrink-0 items-center gap-1 font-mono text-[9px] tracking-[0.15em] text-emerald-300">
-            <Check size={10} strokeWidth={3} />
-            READY
-          </span>
-        )}
-        <span className="min-w-0 flex-1" />
-        {importing && (
-          <span className="animate-pulse shrink-0 font-mono text-[9px] tracking-[0.15em] text-amber-300">
-            READING {importing.done}/{importing.total}
-          </span>
-        )}
-        {importHint && (
-          <span className="max-w-[180px] truncate font-mono text-[9px] tracking-[0.12em] text-cyan-300/80">
-            {importHint}
-          </span>
+        </div>
+        {chipArrows.right && (
+          <button
+            onClick={() => panChips(1)}
+            aria-label="Scroll playlists right"
+            title="More playlists ahead"
+            className="absolute right-1 z-10 grid h-6 w-6 place-items-center rounded-full border border-white/15 bg-black/75 text-white/60 backdrop-blur-sm transition hover:border-white/40 hover:text-white"
+          >
+            <ChevronRight size={11} />
+          </button>
         )}
       </div>
 
@@ -756,6 +878,28 @@ export default function PlaylistPanel({
         ref={barRef}
         className="flex flex-nowrap items-center justify-end gap-2 border-b border-white/10 px-3 py-2.5"
       >
+        {/* downloads sync — only in the Downloads Online view. The socket
+            usually brings a finished download in by itself; this is the
+            manual path: one click, one pass, spin while it runs. */}
+        {activeChipId === DOWNLOADS_FOLDER_ID && onRefreshDownloads && (
+          <div className="mr-auto flex items-center gap-2">
+            <button
+              onClick={onRefreshDownloads}
+              disabled={refreshingDownloads}
+              title="Check the extension for finished downloads"
+              aria-label="Refresh downloads"
+              className="flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-white/15 bg-white/[0.06] px-2.5 font-mono text-[9px] tracking-[0.16em] text-white/60 transition hover:border-white/40 hover:text-white disabled:opacity-50"
+            >
+              <RefreshCw size={11} className={refreshingDownloads ? 'animate-spin' : undefined} />
+              {refreshingDownloads ? 'CHECKING…' : 'REFRESH'}
+            </button>
+            {refreshNote && (
+              <span className="font-mono text-[8px] tracking-[0.15em] text-emerald-300/80">
+                {refreshNote}
+              </span>
+            )}
+          </div>
+        )}
         {/* search — filters the list the app acts on, so the value lives in
             Home and comes back down as `query` */}
         <label className="flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-white/15 bg-white/[0.06] px-2.5 transition focus-within:border-white/40">
@@ -835,6 +979,9 @@ export default function PlaylistPanel({
           </FloatingMenu>
         )}
 
+        {/* player settings live in the playlists drawer now — this row stays
+            [search] [sort ▾] [density] [⋯] */}
+
         <ListMenu
           narrow={narrowBar}
           sort={sort}
@@ -850,6 +997,44 @@ export default function PlaylistPanel({
           onImport={onImport}
           onExport={onExport}
         />
+      </div>
+
+      {/* the view's numbers — the old TRACKLIST bar's job, now one quiet line
+          at the bottom of the header: count and length on the left, and
+          whatever boot/import is doing on the right. Length appears once
+          every track in the view has been probed (rows probe as they scroll
+          into view, so it fills in on its own). */}
+      <div className="flex min-w-0 items-center gap-2 overflow-hidden border-b border-white/10 px-3 py-1.5">
+        <span className="min-w-0 shrink-0 font-mono text-[8px] tracking-[0.2em] text-white/35">
+          {tracks.length} {tracks.length === 1 ? 'TRACK' : 'TRACKS'}
+          {durStats.known === tracks.length && tracks.length > 0 && (
+            <span className="ml-1.5">· {Math.max(1, Math.round(durStats.total / 60))} MIN</span>
+          )}
+        </span>
+        <span className="min-w-0 flex-1" />
+        {boot === 'loading' && (
+          <span className="flex shrink-0 items-center gap-1.5 font-mono text-[8px] tracking-[0.15em] text-white/40">
+            <Disc2 size={9} className="animate-spin" style={{ animationDuration: '1.6s' }} />
+            LOADING
+          </span>
+        )}
+        {boot === 'ready' && (
+          <span className="ready-fade flex shrink-0 items-center gap-1 font-mono text-[8px] tracking-[0.15em] text-emerald-300">
+            <Check size={9} strokeWidth={3} />
+            READY
+          </span>
+        )}
+        {importing && (
+          <span className="animate-pulse shrink-0 font-mono text-[8px] tracking-[0.15em] text-amber-300">
+            READING {importing.done}/{importing.total}
+          </span>
+        )}
+        {importHint && (
+          <span className="max-w-[180px] truncate font-mono text-[8px] tracking-[0.12em] text-cyan-300/80">
+            {importHint}
+          </span>
+        )}
+      </div>
       </div>
 
       {/* one bar for a multi-selection — the three things anyone does with a
@@ -964,9 +1149,7 @@ export default function PlaylistPanel({
                 animateIn={firstPaint && i < 16}
                 measure={k === 0 ? measureRow : undefined}
                 onClick={onRowClick}
-                onContextMenu={(index, x, y) => {
-                  setCtx({ x, y, index })
-                }}
+                onContextMenu={onContextAt}
                 onSelect={onSelect}
                 onRemove={onRemove}
                 onEditMeta={onEditMeta}
@@ -1441,16 +1624,20 @@ const PlaylistRow = memo(function PlaylistRow({
       {dragOver && (
         <span className="absolute left-0 right-0 top-0 z-10 h-[2px] bg-emerald-300 shadow-[0_0_8px_rgba(110,231,183,0.9)]" />
       )}
-      {/* active accent — the left bar the selection lands on */}
+      {/* active accent — the left bar the selection lands on, in the art's
+          colours when Accent from Art is on (defaults to the deck pair) */}
       {active && (
-        <span className="playlist-select absolute left-0 top-0 h-full w-[2px] bg-gradient-to-b from-[#7dd8ff] via-[#c99cff] to-[#ff9dd8] opacity-80" />
+        <span className="playlist-select absolute left-0 top-0 h-full w-[2px] opacity-80" style={{ background: 'linear-gradient(to bottom,var(--accent-a,#7dd8ff),var(--accent-b,#c99cff),var(--accent-a,#ff9dd8))' }} />
       )}
       {/* playback progress along the whole bottom edge, not only the left */}
       {active && (
         <span
           data-progress
-          className="absolute bottom-0 left-0 z-10 h-[2px] origin-left transform-gpu bg-gradient-to-r from-[#7dd8ff] via-[#c99cff] to-[#ff9dd8] opacity-80 transition-transform duration-200"
-          style={{ transform: 'scaleX(0)' }}
+          className="absolute bottom-0 left-0 z-10 h-[2px] origin-left transform-gpu opacity-80 transition-transform duration-200"
+          style={{
+            transform: 'scaleX(0)',
+            background: 'linear-gradient(to right,var(--accent-a,#7dd8ff),var(--accent-b,#c99cff),var(--accent-a,#ff9dd8))',
+          }}
         />
       )}
 

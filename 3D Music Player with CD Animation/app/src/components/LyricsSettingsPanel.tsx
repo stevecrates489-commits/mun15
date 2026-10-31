@@ -147,6 +147,10 @@ export default function LyricsSettingsPanel({
         ))}
       </div>
 
+      {/* custom position lives in the CUSTOMIZE panel now — it is a hub for
+          every movable panel (lyrics AND tracklist), not a lyrics-only
+          setting, so it moved out of here rather than growing a sibling */}
+
       {/* ---- local copy ---- */}
       <div className="mb-1 flex items-center justify-between">
         <span className="font-mono text-[8px] tracking-[0.2em] text-white/35">THIS TRACK</span>

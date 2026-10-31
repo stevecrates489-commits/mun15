@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { clearDiscArt, loadDiscArt, saveDiscArt } from '../../lib/library'
+import {
+  clearDiscArt,
+  clearDiscArtCollection,
+  deleteDiscArtFromCollection,
+  listDiscArtCollection,
+  loadDiscArt,
+  saveDiscArt,
+  saveDiscArtToCollection,
+} from '../../lib/library'
 
 /* Which artwork dresses the disc when nobody asked for something specific.
 
@@ -85,6 +93,72 @@ export function useDiscArt() {
     }
   }, [adopt])
 
+  /* ---- the collection: every uploaded face, kept and re-wearable ---- */
+  const [collection, setCollection] = useState<{ id: string; blob: Blob; url: string; at: number }[]>([])
+  const collectionRef = useRef(collection)
+  useEffect(() => {
+    collectionRef.current = collection
+  }, [collection])
+
+  const refreshCollection = useCallback(async () => {
+    const recs = await listDiscArtCollection()
+    /* drop URLs for records that no longer exist, keep the live ones */
+    const alive = new Set(recs.map((r) => r.id))
+    for (const item of collectionRef.current) {
+      if (!alive.has(item.id)) URL.revokeObjectURL(item.url)
+    }
+    setCollection(recs.map((r) => ({ id: r.id, blob: r.file, url: URL.createObjectURL(r.file), at: r.at })))
+  }, [])
+
+  /* hydrate the collection alongside the current face */
+  useEffect(() => {
+    let alive = true
+    void (async () => {
+      const recs = await listDiscArtCollection()
+      if (!alive) return
+      setCollection(recs.map((r) => ({ id: r.id, blob: r.file, url: URL.createObjectURL(r.file), at: r.at })))
+    })()
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  /* every object URL minted for the collection dies with the session */
+  useEffect(
+    () => () => {
+      for (const item of collectionRef.current) URL.revokeObjectURL(item.url)
+    },
+    [],
+  )
+
+  /* wear a face from the collection: it becomes the saved default, exactly
+     like a fresh upload — and the current one is never removed from the list */
+  const applyFromCollection = useCallback(
+    async (id: string) => {
+      const item = collectionRef.current.find((c) => c.id === id)
+      if (!item || busy) return
+      await saveDiscArt(item.blob)
+      adopt(item.blob)
+      window.clearTimeout(noteTimer.current)
+      setPressNote('FACE FROM THE COLLECTION SAVED')
+      noteTimer.current = window.setTimeout(() => setPressNote(null), 6000)
+    },
+    [adopt, busy],
+  )
+
+  const removeFromCollection = useCallback(async (id: string) => {
+    await deleteDiscArtFromCollection(id)
+    const item = collectionRef.current.find((c) => c.id === id)
+    if (item) URL.revokeObjectURL(item.url)
+    setCollection((prev) => prev.filter((c) => c.id !== id))
+  }, [])
+
+  const clearCollection = useCallback(async () => {
+    await clearDiscArtCollection()
+    for (const item of collectionRef.current) URL.revokeObjectURL(item.url)
+    setCollection([])
+  }, [])
+
   const pick = useCallback(
     async (file: File | null | undefined) => {
       if (!file || busy) return
@@ -94,7 +168,9 @@ export function useDiscArt() {
       try {
         const blob = await rasterizeSquare(file, DISC_ART_MAX)
         await saveDiscArt(blob)
+        await saveDiscArtToCollection(blob)
         adopt(blob)
+        void refreshCollection()
         /* the toggles are left alone on purpose (see the header comment):
            this upload becomes the default face, and the panel reports which
            layer is actually winning right now */
@@ -107,7 +183,7 @@ export function useDiscArt() {
         setBusy(false)
       }
     },
-    [adopt, busy]
+    [adopt, busy, refreshCollection]
   )
 
   const reset = useCallback(async () => {
@@ -127,6 +203,11 @@ export function useDiscArt() {
     setTrackArt,
     setPlaylistArt,
     pressNote,
+    collection,
+    applyFromCollection,
+    removeFromCollection,
+    clearCollection,
+    refreshCollection,
   }
 }
 

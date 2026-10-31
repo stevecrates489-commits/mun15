@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { X, Search, Play, Square, Trash2, Radio as RadioIcon, Star, Music2, Sparkles, ChevronDown } from 'lucide-react'
+import { X, Search, Play, Square, Trash2, Radio as RadioIcon, Star, Music2, Sparkles, ChevronDown, Mic2 } from 'lucide-react'
 import {
   popularStations,
   searchStations,
@@ -23,13 +23,19 @@ interface Props {
   addAll: boolean
   onAddAll: (v: boolean) => void
   favourites: string[]
-  onToggleFavourite: (url: string) => void
+  onToggleFavourite: (
+    url: string,
+    meta?: { uuid?: string; name: string; codec?: string; bitrate?: number; country?: string },
+  ) => void
   /** the song the stream is currently playing, when the stream carries titles */
   song: RadioSong | null
   icy: IcyStatus | null
   reconnecting: boolean
   onPlayStation: (s: Station) => void
-  onPlayUrl: (url: string) => void
+  onPlayUrl: (
+    url: string,
+    meta?: { uuid: string; name: string; codec: string; bitrate: number; country: string },
+  ) => void
   onForget: (url: string) => void
   current: KnownStation | null
   playing: boolean
@@ -42,14 +48,35 @@ interface Props {
   onLead: (sec: number) => void
   levelOn: boolean
   onLevelOn: (v: boolean) => void
-  /* the live backdrop behind the player — the same one the header circle
-     picks. The deck's analyser watches the station's element too, so the
-     moment a station tunes in the visual reacts to it. */
+  /* what the live visual listens to while it is on: this station, or the
+     deck. A source switch, not a power switch — the visual itself is
+     turned on and off in the visualiser panel, never from here. */
   vizOn: boolean
   onVizToggle: (on: boolean) => void
+  /* the lyrics panel's own toggle — the same switch the header chip flips,
+     parked here so a radio listener never has to reach the main deck */
+  lyricsOn: boolean
+  onToggleLyrics: () => void
   stop: () => void
   onClose: () => void
 }
+
+/* the shape a row already holds — handed along when a station is starred or
+   tuned, so the known list and the header keep the real name, not the URL */
+type RowMeta = { uuid: string; name: string; codec: string; bitrate: number; country: string }
+const metaOf = (s: {
+  uuid: string
+  name: string
+  codec: string
+  bitrate: number
+  country: string
+}): RowMeta => ({
+  uuid: s.uuid,
+  name: s.name,
+  codec: s.codec,
+  bitrate: s.bitrate,
+  country: s.country,
+})
 
 const mbps = (kbps: number) => (kbps ? `${kbps}` : '—')
 
@@ -142,7 +169,17 @@ function SongClockBar({
  * Remounting on each new song restarts the transition, so every track change
  * reads as a change.
  */
-function NowPlayingStrip({ song, station, tone }: { song: RadioSong | null; station: string; tone: string }) {
+function NowPlayingStrip({
+  song,
+  station,
+  tone,
+  connecting,
+}: {
+  song: RadioSong | null
+  station: string
+  tone: string
+  connecting?: boolean
+}) {
   /* mounted fresh per track change (the parent keys it), so the initial state
      is already "off-screen" and the transition has something to run from.
      Only the flip is in the effect — never a synchronous setState. */
@@ -160,6 +197,16 @@ function NowPlayingStrip({ song, station, tone }: { song: RadioSong | null; stat
       }}
     >
       <Music2 size={11} className={`mt-px shrink-0 ${tone}`} />
+      {/* the buffering beat: the stream is being fetched but nothing is on
+          air yet — a spinner, not a dead name. Gone the moment audio starts
+          or the attempt reports an error. */}
+      {connecting && (
+        <span
+          aria-label="Connecting to the stream"
+          title="CONNECTING…"
+          className="mt-0.5 inline-block h-2.5 w-2.5 shrink-0 animate-spin rounded-full border-[1.5px] border-white/25 border-t-white/80"
+        />
+      )}
       {/* the station is always named — the detected song sits under it, so a
           title appearing is a change rather than a replacement */}
       <div className="min-w-0 flex-1">
@@ -214,6 +261,8 @@ export default function RadioPanel({
   onLevelOn,
   vizOn,
   onVizToggle,
+  lyricsOn,
+  onToggleLyrics,
   stop,
   onClose,
 }: Props) {
@@ -232,6 +281,9 @@ export default function RadioPanel({
   /* the proxy and the song-end detector are for the two people who know
      why they want them — everyone else should never have to read past them */
   const [showAdvanced, setShowAdvanced] = useState(false)
+  /* the exit is played here rather than left to the unmount: the panel slides
+     out over 280ms instead of vanishing between frames */
+  const [closing, setClosing] = useState(false)
   const reqRef = useRef(0)
 
   /* language & country are pickers, not typing: the federation's own lists,
@@ -308,7 +360,11 @@ export default function RadioPanel({
   )
 
   return (
-    <div className="settings-panel fx-blur fixed bottom-[calc(13%+46px)] left-[5%] z-[89] flex max-h-[min(62vh,520px)] w-[min(92vw,560px)] flex-col rounded-2xl border border-white/15 bg-black/90 backdrop-blur-md">
+    <div
+      className={`settings-panel fx-blur fixed bottom-[calc(13%+46px)] left-[5%] z-[89] flex max-h-[min(62vh,520px)] w-[min(92vw,560px)] flex-col rounded-2xl border border-white/15 bg-black/90 backdrop-blur-md${
+        closing ? ' is-closing panel-out-soft' : ''
+      }`}
+    >
       {/* header */}
       <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
         <span className="flex items-center gap-2 font-mono text-[9px] tracking-[0.25em] text-white/50">
@@ -316,13 +372,13 @@ export default function RadioPanel({
           RADIO
         </span>
         <div className="flex items-center gap-2">
-          {/* the live visual, from inside the radio: the deck's analyser
-              already watches the station's element, so ON means the backdrop
-              dances with whatever is on air */}
+          {/* the live visual's source, from inside the radio: ON makes the
+              backdrop listen to this station, OFF hands it back to the deck.
+              The visual itself is switched in the visualiser panel. */}
           <button
             onClick={() => onVizToggle(!vizOn)}
             aria-pressed={vizOn}
-            title={vizOn ? 'Live visual on — reactive to this station' : 'Turn the live visual on'}
+            title={vizOn ? 'The visual is listening to this station' : 'The visual is listening to the deck'}
             className={`flex items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[7px] tracking-[0.15em] transition ${
               vizOn
                 ? 'border-emerald-300/60 bg-emerald-400/15 text-emerald-200'
@@ -331,6 +387,22 @@ export default function RadioPanel({
           >
             <Sparkles size={8} />
             VISUAL {vizOn ? 'ON' : 'OFF'}
+          </button>
+          {/* lyrics — the main player's toggle, reachable where the radio
+              listener already is. The panel opens for the radio's own
+              detected songs exactly as it does for library tracks. */}
+          <button
+            onClick={onToggleLyrics}
+            aria-pressed={lyricsOn}
+            title={lyricsOn ? 'Hide the lyrics panel' : 'Show the lyrics panel'}
+            className={`flex items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[7px] tracking-[0.15em] transition ${
+              lyricsOn
+                ? 'border-emerald-300/60 bg-emerald-400/15 text-emerald-200'
+                : 'border-white/15 text-white/50 hover:border-white/40 hover:text-white'
+            }`}
+          >
+            <Mic2 size={8} />
+            LYRICS {lyricsOn ? 'ON' : 'OFF'}
           </button>
           {(playing || connecting) && current && (
             <button
@@ -342,7 +414,14 @@ export default function RadioPanel({
               STOP
             </button>
           )}
-          <button onClick={onClose} aria-label="Close radio" className="text-white/40 hover:text-white">
+          <button
+            onClick={() => {
+              setClosing(true)
+              window.setTimeout(onClose, 280)
+            }}
+            aria-label="Close radio"
+            className="text-white/40 hover:text-white"
+          >
             <X size={12} />
           </button>
         </div>
@@ -354,6 +433,7 @@ export default function RadioPanel({
         song={song}
         station={current?.name ?? ''}
         tone={current ? (playing ? 'text-red-400' : 'text-white/30') : 'text-white/25'}
+        connecting={connecting && !playing}
       />
       {/* the station's own clock — where the song is, and the listener's
           correction to it */}
@@ -426,7 +506,7 @@ export default function RadioPanel({
                   {known.map((s) => (
                     <tr
                       key={s.url}
-                      onDoubleClick={() => onPlayUrl(s.url)}
+                      onDoubleClick={() => onPlayUrl(s.url, metaOf(s))}
                       className={`group cursor-pointer transition-colors ${current?.url === s.url ? 'bg-white/[0.08]' : 'hover:bg-white/[0.05]'}`}
                     >
                       <td className="max-w-[160px] truncate px-1.5 py-1.5 text-[11px] text-white/75 group-hover:text-white">{s.name}</td>
@@ -440,7 +520,7 @@ export default function RadioPanel({
                           <button
                             onClick={(e) => {
                               e.stopPropagation()
-                              onPlayUrl(s.url)
+                              onPlayUrl(s.url, metaOf(s))
                             }}
                             title="Play"
                             className="grid h-6 w-6 place-items-center rounded-md text-white/45 transition hover:bg-white/10 hover:text-white"
@@ -709,7 +789,7 @@ export default function RadioPanel({
                           <button
                             onClick={(e) => {
                               e.stopPropagation()
-                              onToggleFavourite(s.url)
+                              onToggleFavourite(s.url, metaOf(s))
                             }}
                             title={favourites.includes(s.url) ? 'Remove from favourites' : 'Add to favourites'}
                             className={`grid h-6 w-6 place-items-center rounded-md transition hover:bg-white/10 ${

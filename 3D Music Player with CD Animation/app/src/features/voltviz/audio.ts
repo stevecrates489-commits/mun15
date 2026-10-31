@@ -8,9 +8,21 @@
  * file derives the rest from it: bands from the spectrum, level from the
  * waveform, and a light energy tracker for the beat and the onsets.
  *
+ * ONE analyser, read once a frame. The previous version gave every requested
+ * FFT size its own child `AnalyserNode` hanging off the deck's analyser, and
+ * that is what made some visuals react while others sat still: a fan-out of
+ * analysers is only as good as every one of those nodes staying fed and
+ * staying bound to the analyser the engine currently feeds. A node created
+ * before the deck re-pointed its graph (a track swap, the radio attaching its
+ * own capture stream) read a dead branch for ever, and whichever visual asked
+ * for that size simply froze. There is now a single tap — large enough to
+ * resolve the bass, unsmoothed so this file owns the smoothing — sampled once
+ * per frame, and `spectrum()` / `waveform()` resample that one read to the
+ * size the visual asks for. Nothing a visual requests can miss the audio.
+ *
  * Nothing here touches the audio graph's output: an analyser is a pass-through
- * node, so the child analysers used for the larger FFT sizes are fed from the
- * deck's analyser and go nowhere.
+ * node, and the tap runs out through a gain of NOTHING to the destination so
+ * the graph is walked and there is data to read.
  */
 
 import type { AudioFrame, Bands, BeatInfo, FftSize, OnsetInfo } from './audio-types'
@@ -26,11 +38,24 @@ const RANGES: [keyof Bands, number, number][] = [
 
 const EMPTY_BANDS: Bands = { sub: 0, bass: 0, lowMid: 0, mid: 0, highMid: 0, treble: 0 }
 
+/** Bins of the one tap: 4096 (8192-point FFT) — ~6 Hz at 48 kHz, fine enough
+ *  to resolve sub-bass when a visual asks for a 512-point spectrum. */
+const TAP_FFT = 8192
+
 interface Tap {
+  base: AnalyserNode
   analyser: AnalyserNode
-  bytes: Uint8Array<ArrayBuffer>
-  wave: Uint8Array<ArrayBuffer>
-  floats: Float32Array<ArrayBuffer>
+  freq: Uint8Array<ArrayBuffer>
+  wave: Float32Array<ArrayBuffer>
+}
+
+/** One resampled spectrum, kept per (fftSize, smoothing) for the frame. */
+interface SpectrumSlot {
+  /** the frame this slot was computed for — a second read in the same frame
+   *  must not smooth the values twice */
+  token: number
+  out: Uint8Array<ArrayBuffer>
+  raw: Uint8Array<ArrayBuffer>
 }
 
 const clamp = (v: number, a = 0, b = 1) => Math.min(b, Math.max(a, v))
@@ -41,30 +66,191 @@ const clamp = (v: number, a = 0, b = 1) => Math.min(b, Math.max(a, v))
  */
 export interface AudioFrameSource {
   read(now: number): AudioFrame
-  /** Forget the taps — the deck's analyser belongs to a graph that is gone. */
+  /** Forget the tap — the deck's analyser belongs to a graph that is gone. */
   reset(): void
 }
 
 export function createAudioFrameSource(getAnalyser: () => AnalyserNode | null): AudioFrameSource {
-  const spectrumTaps = new Map<string, Tap>()
-  const waveformTaps = new Map<string, Tap>()
-  let stereo: { left: Float32Array; right: Float32Array } | null = null
-  let splitter: ChannelSplitterNode | null = null
-  let leftTap: Tap | null = null
-  let rightTap: Tap | null = null
+  let tap: Tap | null = null
   let sink: GainNode | null = null
+  /** bumped by every `read()`: everything derived is computed once per frame */
+  let token = 0
+  let sampledToken = -1
+  const spectra = new Map<string, SpectrumSlot>()
+  const floats = new Map<string, Float32Array<ArrayBuffer>>()
 
-  /* A node whose output goes nowhere is never processed — an analyser that is
-     never pulled reads silence, which is exactly how the deck's own comment
-     puts it. Every tap added here therefore runs through one gain of NOTHING
-     out to the speakers, so the graph is walked and the tap has data to read. */
-  function sinkFor(base: AnalyserNode): GainNode {
-    if (sink) return sink
-    const node = base.context.createGain()
-    node.gain.value = 0
-    node.connect(base.context.destination)
-    sink = node
-    return node
+  /* the stereo pair — rebuilt when the analyser changes, like the tap */
+  let splitterBase: AnalyserNode | null = null
+  let leftTap: AnalyserNode | null = null
+  let rightTap: AnalyserNode | null = null
+  let leftBuf: Float32Array<ArrayBuffer> | null = null
+  let rightBuf: Float32Array<ArrayBuffer> | null = null
+
+  /* The one tap. Rebound whenever `getAnalyser()` hands back a different node:
+     the engine builds its graph on the first play and again for a station, and
+     a tap left on the old node reads silence for ever. */
+  function ensureTap(base: AnalyserNode): Tap {
+    if (tap && tap.base === base) return tap
+    tap = null
+    sink = null
+    spectra.clear()
+    floats.clear()
+    splitterBase = null
+    leftTap = null
+    rightTap = null
+    leftBuf = null
+    rightBuf = null
+    sampledToken = -1
+
+    const node = base.context.createAnalyser()
+    node.fftSize = TAP_FFT
+    /* unsmoothed: the smoothing a visual asks for is applied per slot below,
+       so two visuals asking for different amounts at the same size both get
+       what they asked for instead of overwriting one node's setting */
+    node.smoothingTimeConstant = 0
+    const mute = base.context.createGain()
+    mute.gain.value = 0
+    mute.connect(base.context.destination)
+    sink = mute
+    try {
+      base.connect(node)
+      node.connect(mute)
+    } catch {
+      /* a closed context — the frame reads as silence */
+    }
+    tap = {
+      base,
+      analyser: node,
+      freq: new Uint8Array(node.frequencyBinCount),
+      wave: new Float32Array(node.fftSize),
+    }
+    return tap
+  }
+
+  /** Pull the tap's buffers once per frame, however many visuals ask. */
+  function sample(t: Tap) {
+    if (sampledToken === token) return
+    sampledToken = token
+    t.analyser.getByteFrequencyData(t.freq)
+    t.analyser.getFloatTimeDomainData(t.wave)
+  }
+
+  function spectrum(fftSize: FftSize = 2048, smoothing = 0.8): Uint8Array {
+    const base = getAnalyser()
+    if (!base) return new Uint8Array(1)
+    const t = ensureTap(base)
+    sample(t)
+
+    const bins = fftSize / 2
+    const key = `${fftSize}:${smoothing}`
+    let slot = spectra.get(key)
+    if (!slot || slot.out.length !== bins) {
+      slot = { token: -1, out: new Uint8Array(bins), raw: new Uint8Array(bins) }
+      spectra.set(key, slot)
+    }
+    if (slot.token === token) return slot.out
+
+    /* resample: each output bin takes the loudest tap bin inside its band, so
+       a coarse spectrum keeps its peaks instead of averaging them away */
+    const src = t.freq
+    const srcBins = src.length
+    for (let j = 0; j < bins; j++) {
+      const from = Math.floor((j * srcBins) / bins)
+      const to = Math.max(from + 1, Math.floor(((j + 1) * srcBins) / bins))
+      let peak = 0
+      for (let i = from; i < to && i < srcBins; i++) if (src[i] > peak) peak = src[i]
+      slot.raw[j] = peak
+    }
+
+    /* the analyser's own smoothing constant, applied per output bin: `out`
+       doubles as the previous frame's value */
+    const k = clamp(1 - smoothing, 0.01, 1)
+    for (let j = 0; j < bins; j++) slot.out[j] += (slot.raw[j] - slot.out[j]) * k
+
+    slot.token = token
+    return slot.out
+  }
+
+  /** The newest `fftSize` samples of the time-domain buffer, -1..1. */
+  function floatWave(fftSize: FftSize): Float32Array {
+    const base = getAnalyser()
+    if (!base) return new Float32Array(1)
+    const t = ensureTap(base)
+    sample(t)
+    const key = String(fftSize)
+    let out = floats.get(key)
+    if (!out || out.length !== fftSize) {
+      out = new Float32Array(fftSize)
+      floats.set(key, out)
+    }
+    const from = Math.max(0, t.wave.length - fftSize)
+    for (let i = 0; i < fftSize; i++) out[i] = t.wave[from + i] ?? 0
+    return out
+  }
+
+  function waveformFloat(fftSize: FftSize = 2048): Float32Array {
+    return floatWave(fftSize)
+  }
+
+  function waveform(fftSize: FftSize = 2048): Uint8Array {
+    const src = floatWave(fftSize)
+    const out = new Uint8Array(src.length)
+    for (let i = 0; i < src.length; i++) out[i] = Math.round(128 + clamp(src[i], -1, 1) * 127)
+    return out
+  }
+
+  function stereoFrame(): { left: Float32Array; right: Float32Array } {
+    const base = getAnalyser()
+    if (!base) return { left: new Float32Array(2048), right: new Float32Array(2048) }
+    ensureTap(base)
+    if (splitterBase !== base) {
+      splitterBase = base
+      leftTap = null
+      rightTap = null
+      leftBuf = null
+      rightBuf = null
+      try {
+        const split = base.context.createChannelSplitter(2)
+        const l = base.context.createAnalyser()
+        const r = base.context.createAnalyser()
+        for (const node of [l, r]) {
+          node.fftSize = 2048
+          node.smoothingTimeConstant = 0.8
+        }
+        split.connect(l, 0)
+        split.connect(r, 1)
+        l.connect(sink ?? base.context.destination)
+        r.connect(sink ?? base.context.destination)
+        leftTap = l
+        rightTap = r
+        leftBuf = new Float32Array(2048)
+        rightBuf = new Float32Array(2048)
+      } catch {
+        /* a mono deck: the two channels read the same */
+      }
+    }
+    if (leftTap && rightTap && leftBuf && rightBuf) {
+      leftTap.getFloatTimeDomainData(leftBuf)
+      rightTap.getFloatTimeDomainData(rightBuf)
+      return { left: leftBuf, right: rightBuf }
+    }
+    const mono = floatWave(2048)
+    return { left: mono, right: mono }
+  }
+
+  function bandsOf(bytes: Uint8Array, sampleRate: number): Bands {
+    const nyquist = sampleRate / 2
+    const bins = bytes.length
+    const out: Bands = { ...EMPTY_BANDS }
+    for (const [name, lo, hi] of RANGES) {
+      const from = Math.max(0, Math.round((lo / nyquist) * bins))
+      const to = Math.min(bins, Math.round((hi / nyquist) * bins))
+      if (to <= from) continue
+      let sum = 0
+      for (let i = from; i < to; i++) sum += bytes[i]
+      out[name] = clamp(sum / (to - from) / 255)
+    }
+    return out
   }
 
   let startedAt = performance.now()
@@ -87,115 +273,6 @@ export function createAudioFrameSource(getAnalyser: () => AnalyserNode | null): 
     hat: { since: 99, envelope: 0, strength: 0 },
   }
   const onsetAvg = { kick: 0.04, snare: 0.02, hat: 0.01 }
-
-  function tapFor(map: Map<string, Tap>, base: AnalyserNode, fftSize: number, smoothing: number): Tap {
-    const key = `${fftSize}:${smoothing}`
-    const found = map.get(key)
-    if (found) {
-      found.analyser.smoothingTimeConstant = smoothing
-      return found
-    }
-    const node = base.context.createAnalyser()
-    node.fftSize = fftSize
-    node.smoothingTimeConstant = smoothing
-    try {
-      base.connect(node)
-      node.connect(sinkFor(base))
-    } catch {
-      /* a closed context — the frame reads as silence */
-    }
-    const tap: Tap = {
-      analyser: node,
-      bytes: new Uint8Array(node.frequencyBinCount),
-      wave: new Uint8Array(node.fftSize),
-      floats: new Float32Array(node.fftSize),
-    }
-    map.set(key, tap)
-    return tap
-  }
-
-  function spectrum(fftSize: FftSize = 2048, smoothing = 0.8): Uint8Array {
-    const base = getAnalyser()
-    if (!base) return new Uint8Array(1)
-    const tap = tapFor(spectrumTaps, base, fftSize, smoothing)
-    tap.analyser.getByteFrequencyData(tap.bytes)
-    return tap.bytes
-  }
-
-  function waveform(fftSize: FftSize = 2048, smoothing = 0.8): Uint8Array {
-    const base = getAnalyser()
-    if (!base) return new Uint8Array(1)
-    const tap = tapFor(waveformTaps, base, fftSize, smoothing)
-    tap.analyser.getByteTimeDomainData(tap.wave)
-    return tap.wave
-  }
-
-  function waveformFloat(fftSize: FftSize = 2048, smoothing = 0.8): Float32Array {
-    const base = getAnalyser()
-    if (!base) return new Float32Array(1)
-    const tap = tapFor(waveformTaps, base, fftSize, smoothing)
-    tap.analyser.getFloatTimeDomainData(tap.floats)
-    return tap.floats
-  }
-
-  function stereoFrame(): { left: Float32Array; right: Float32Array } {
-    const base = getAnalyser()
-    if (!base) return { left: new Float32Array(2048), right: new Float32Array(2048) }
-    if (!splitter) {
-      try {
-        splitter = base.context.createChannelSplitter(2)
-        base.connect(splitter)
-        leftTap = tapFor(waveformTaps, base, 2048, 0.8)
-        const l = base.context.createAnalyser()
-        const r = base.context.createAnalyser()
-        for (const node of [l, r]) {
-          node.fftSize = 2048
-          node.smoothingTimeConstant = 0.8
-        }
-        splitter.connect(l, 0)
-        splitter.connect(r, 1)
-        l.connect(sinkFor(base))
-        r.connect(sinkFor(base))
-        leftTap = {
-          analyser: l,
-          bytes: new Uint8Array(l.frequencyBinCount),
-          wave: new Uint8Array(l.fftSize),
-          floats: new Float32Array(l.fftSize),
-        }
-        rightTap = {
-          analyser: r,
-          bytes: new Uint8Array(r.frequencyBinCount),
-          wave: new Uint8Array(r.fftSize),
-          floats: new Float32Array(r.fftSize),
-        }
-        stereo = { left: leftTap.floats, right: rightTap.floats }
-      } catch {
-        /* a mono deck: the two channels read the same */
-      }
-    }
-    if (stereo && leftTap && rightTap) {
-      leftTap.analyser.getFloatTimeDomainData(leftTap.floats)
-      rightTap.analyser.getFloatTimeDomainData(rightTap.floats)
-      return stereo
-    }
-    const mono = waveformFloat()
-    return { left: mono, right: mono }
-  }
-
-  function bandsOf(bytes: Uint8Array, sampleRate: number): Bands {
-    const nyquist = sampleRate / 2
-    const bins = bytes.length
-    const out: Bands = { ...EMPTY_BANDS }
-    for (const [name, lo, hi] of RANGES) {
-      const from = Math.max(0, Math.round((lo / nyquist) * bins))
-      const to = Math.min(bins, Math.round((hi / nyquist) * bins))
-      if (to <= from) continue
-      let sum = 0
-      for (let i = from; i < to; i++) sum += bytes[i]
-      out[name] = clamp(sum / (to - from) / 255)
-    }
-    return out
-  }
 
   function trackBeat(bass: number, level: number, dt: number): BeatInfo {
     energyAvg += (bass - energyAvg) * Math.min(1, dt * 4)
@@ -249,12 +326,16 @@ export function createAudioFrameSource(getAnalyser: () => AnalyserNode | null): 
   }
 
   function reset() {
-    spectrumTaps.clear()
-    waveformTaps.clear()
-    stereo = null
-    splitter = null
+    tap = null
+    sink = null
+    spectra.clear()
+    floats.clear()
+    splitterBase = null
     leftTap = null
     rightTap = null
+    leftBuf = null
+    rightBuf = null
+    sampledToken = -1
     startedAt = performance.now()
   }
 
@@ -266,10 +347,11 @@ export function createAudioFrameSource(getAnalyser: () => AnalyserNode | null): 
       frameTime = (now - startedAt) / 1000
       frameDt = clamp((now - lastAt) / 1000, 0, 0.1)
       lastAt = now
+      token += 1
 
       const bytes = spectrum(2048, 0.8)
       const bands = bandsOf(bytes, sampleRate)
-      const wave = waveformFloat(2048, 0.8)
+      const wave = floatWave(2048)
       let sum = 0
       let peak = 0
       for (let i = 0; i < wave.length; i++) {
@@ -290,8 +372,8 @@ export function createAudioFrameSource(getAnalyser: () => AnalyserNode | null): 
         dt: frameDt,
         sampleRate,
         spectrum: (options) => spectrum(options?.fftSize ?? 2048, options?.smoothing ?? 0.8),
-        waveform: (options) => waveform(options?.fftSize ?? 2048, options?.smoothing ?? 0.8),
-        waveformFloat: (options) => waveformFloat(options?.fftSize ?? 2048, options?.smoothing ?? 0.8),
+        waveform: (options) => waveform(options?.fftSize ?? 2048),
+        waveformFloat: (options) => waveformFloat(options?.fftSize ?? 2048),
         stereo: stereoFrame,
         bands,
         level,

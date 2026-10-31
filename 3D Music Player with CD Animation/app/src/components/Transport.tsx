@@ -95,8 +95,9 @@ export default function Transport({
           ref={fillRef}
           style={{
             width: '0%',
-            background: 'linear-gradient(90deg,#7dd8ff,#c99cff,#ff9dd8)',
-            boxShadow: '0 0 10px rgba(160,140,255,0.8)',
+            /* the accent the art picked — defaults to the deck's own colours */
+            background: 'linear-gradient(90deg,var(--accent-a,#7dd8ff),var(--accent-b,#c99cff),var(--accent-a,#ff9dd8))',
+            boxShadow: '0 0 10px var(--accent-glow,rgba(160,140,255,0.8))',
           }}
         />
         <div

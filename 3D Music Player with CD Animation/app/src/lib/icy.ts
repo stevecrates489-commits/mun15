@@ -53,6 +53,11 @@ export interface Probe {
 const PROBE_BYTES = 24 * 1024
 const TITLE_MIN = 3
 
+/* AutoDJ systems fill the tag when nothing is announced — "No title" and its
+   cousins are placeholders, not songs. They are dropped here, so the panel
+   keeps showing the station's own name instead of the placeholder. */
+const TITLE_PLACEHOLDER = /^(no[\s-]?title|untitled|unknown( track| artist|)?|n\/?a|none|track)$/i
+
 const decoder = new TextDecoder()
 
 /* ── optional CORS relay ────────────────────────────────────────────────
@@ -350,7 +355,7 @@ export class IcyTracker {
     const m = /StreamTitle\s*=\s*'([^']*)'/i.exec(text)
     if (!m) return
     const raw = m[1].trim()
-    if (!raw || raw === this.lastTitle) return
+    if (!raw || raw === this.lastTitle || TITLE_PLACEHOLDER.test(raw)) return
     if (raw.length < TITLE_MIN) return
 
     /* a station blinking its own name between tracks is the classic false

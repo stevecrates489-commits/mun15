@@ -253,11 +253,14 @@ export default function DiscCase({
     const applySpin = (dt: number, t: number) => {
       if (!scratchRef.current.active) {
         /* BPM-reactive: fast songs spin the disc faster. The multiplier scales
-           the whole target, so 0 eases the disc to a stop and 2 doubles the
-           cruise — the spring below keeps the change smooth either way */
+           the whole target: 0 holds the disc completely still, 1 is the
+           natural cruise, 2 doubles it — and rotation happens only while the
+           audio is actually playing. The ease below is what makes a speed
+           change glide instead of snap. */
         const bpm = bpmRef.current
         const cruise = bpm ? Math.min(240, Math.max(105, bpm * 1.05)) : 150
-        const target = playingRef.current ? cruise * speedScaleRef.current : 0
+        const target =
+          playingRef.current && speedScaleRef.current > 0 ? cruise * speedScaleRef.current : 0
         speedRef.current += (target - speedRef.current) * (1 - Math.exp(-dt * 1.6))
         if (burstRef.current > 0.05) burstRef.current *= Math.exp(-dt * 4.2)
         else burstRef.current = 0
@@ -432,24 +435,19 @@ export default function DiscCase({
     let d = a - scratchRef.current.lastAngle
     if (d > 180) d -= 360
     if (d < -180) d += 360
-    const now = performance.now()
-    const dt = Math.max(8, now - scratchRef.current.at) / 1000
-    scratchRef.current.at = now
+    scratchRef.current.at = performance.now()
     scratchRef.current.lastAngle = a
     scratchRef.current.movedAngle += Math.abs(d)
-    /* smooth the measured speed so a jittery frame cannot fling the disc */
-    scratchRef.current.vel = scratchRef.current.vel * 0.55 + (d / dt) * 0.45
-    angleRef.current = (angleRef.current + d + 360) % 360
-    if (discGroupRef.current) discGroupRef.current.style.transform = `rotate(${angleRef.current}deg)`
-    if (sheenARef.current) sheenARef.current.style.transform = `rotate(${angleRef.current}deg)`
-    if (sheenBRef.current)
-      sheenBRef.current.style.transform = `rotate(${(angleRef.current * 0.62 + 140) % 360}deg)`
+    /* the seek is the pointer's job alone: the platter keeps its own pace
+       (playing state × the speed multiplier) and never follows the finger,
+       so scrubbing can no longer fast-forward or jump the rotation */
     onScratch((d / 360) * 3) // one full revolution ≈ 3 seconds
   }
   const onDiscUp = () => {
+    /* release hands back nothing: no fling velocity, the disc simply eases
+       back to its cruise (or to a stop when the speed setter is at 0) */
     if (scratchRef.current.active) {
       scratchRef.current.active = false
-      speedRef.current = Math.max(-1400, Math.min(1400, scratchRef.current.vel))
     }
   }
   /* a scratch is not a click: rotating never toggles playback —

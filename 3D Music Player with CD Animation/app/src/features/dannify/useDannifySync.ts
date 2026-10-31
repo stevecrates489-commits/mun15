@@ -41,13 +41,15 @@ const FIRST_PASS_MS = 6000
 const EVERY_MS = 60_000
 
 export function useDannifySync({ addSavedTrack, addToDownloads }: Deps) {
-  /* a pass in flight must not be joined by the next timer tick: importing
-     two copies of one song would put it in the playlist twice */
-  const busy = useRef(false)
+  /* Passes are SERIALIZED on a promise chain. The old busy-guard turned a
+     click that arrived during a pass into a silent no-op — the Refresh
+     button read as dead — and two truly concurrent passes could still have
+     double-imported one song (both read the "new" list before either
+     remembered it). A queue fixes both: every caller gets its own pass, in
+     order, and a pass that finds nothing costs one small list read. */
+  const chainRef = useRef<Promise<number>>(Promise.resolve(0))
 
-  const sync = useCallback(async (): Promise<number> => {
-    if (busy.current) return 0
-    busy.current = true
+  const doPass = useCallback(async (): Promise<number> => {
     let brought = 0
     try {
       for (const entry of await newDannifyDownloads()) {
@@ -99,11 +101,19 @@ export function useDannifySync({ addSavedTrack, addToDownloads }: Deps) {
       }
     } catch {
       /* the list itself was unreachable: nothing to do */
-    } finally {
-      busy.current = false
     }
     return brought
   }, [addSavedTrack, addToDownloads])
+
+  const sync = useCallback((): Promise<number> => {
+    const pass = chainRef.current.then(doPass)
+    /* the chain must survive a failed pass — the next caller still runs */
+    chainRef.current = pass.then(
+      () => 0,
+      () => 0,
+    )
+    return pass
+  }, [doPass])
 
   useEffect(() => {
     const first = window.setTimeout(() => void sync(), FIRST_PASS_MS)

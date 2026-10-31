@@ -232,7 +232,16 @@ def _downloads() -> dict[str, Any]:
         rel = path.relative_to(base).as_posix()
         meta = index.get(rel) or index.get(rel.replace('/', '\\')) or {}
         title = str(meta.get('title') or '')
-        artist = str(meta.get('artist') or '')
+        # the whole bill, not just the first name: the vault keeps the artist
+        # list (YouTube Music gives several), and the player's lyrics matching
+        # needs the complete string to have a chance
+        raw_artists = meta.get('artists')
+        if isinstance(raw_artists, str):
+            raw_artists = [raw_artists]
+        if isinstance(raw_artists, (list, tuple)):
+            artist = ', '.join(str(a).strip() for a in raw_artists if str(a).strip())
+        else:
+            artist = str(meta.get('artist') or '')
         if not title:
             stem = path.stem
             artist, title = (stem.split(' - ', 1) if ' - ' in stem else (artist, stem))

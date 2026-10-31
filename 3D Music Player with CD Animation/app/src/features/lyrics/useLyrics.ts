@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react'
+import { useLayoutBox } from '../layout/useLayoutBox'
 
 /* where the lyrics sit. Two positions are meaningful with the CD on the stage
    and one with it hidden — the stage box is the only thing left to fill then */
@@ -49,6 +50,23 @@ export function useLyrics() {
     localStorage.setItem('md-lyrics-brightness', String(Math.round(v)))
   }, [])
 
+  /* ---- custom position (unlock layout) ----
+     While ON the panel leaves the three fixed positions and lives in its own
+     viewport rectangle, moved and resized through the layout editor. TWO
+     rectangles are kept, one per CD state (metallic on / white off) — the
+     lyrics read best in different places depending on whether the disc is
+     there to share the stage. The CD toggle switches between them live; each
+     survives reloads and on/off toggles. The legacy single-box key
+     (`md-lyrics-box`) is read as the CD-on fallback so nothing is lost. */
+  const [custom, setCustomState] = useState(() => localStorage.getItem('md-lyrics-custom') === '1')
+  const setCustom = useCallback((on: boolean) => {
+    setCustomState(on)
+    localStorage.setItem('md-lyrics-custom', on ? '1' : '0')
+  }, [])
+
+  const onLayout = useLayoutBox('md-lyrics-box-on', 'md-lyrics-box')
+  const offLayout = useLayoutBox('md-lyrics-box-off')
+
   return {
     enabled,
     toggle,
@@ -58,6 +76,12 @@ export function useLyrics() {
     setSize,
     brightness,
     setBrightness,
+    custom,
+    setCustom,
+    boxOn: onLayout.box,
+    setBoxOn: onLayout.setBox,
+    boxOff: offLayout.box,
+    setBoxOff: offLayout.setBox,
   }
 }
 

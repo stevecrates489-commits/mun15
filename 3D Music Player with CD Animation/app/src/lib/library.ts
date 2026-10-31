@@ -220,6 +220,132 @@ export async function clearDiscArt(): Promise<void> {
   }
 }
 
+/* ---- the disc-art collection ----
+   Every uploaded face is kept, so an old label can be worn again from the CD
+   settings' collection flyout. The records share the META store under a
+   common key prefix — no schema migration; a ranged getAll is the list. */
+
+export interface DiscArtRecord {
+  id: string
+  file: Blob
+  at: number
+}
+
+const COLLECTION_PREFIX = 'discArtCol:'
+const collectionRange = () =>
+  IDBKeyRange.bound(COLLECTION_PREFIX, `${COLLECTION_PREFIX}\uffff`)
+
+export async function listDiscArtCollection(): Promise<DiscArtRecord[]> {
+  try {
+    const db = await openDb()
+    const recs = await new Promise<{ key: string; file: unknown; at?: number }[]>((res, rej) => {
+      const req = db.transaction(META, 'readonly').objectStore(META).getAll(collectionRange())
+      req.onsuccess = () => res(req.result ?? [])
+      req.onerror = () => rej(req.error)
+    })
+    return recs
+      .filter((r) => r.file instanceof Blob)
+      .map((r) => ({ id: r.key.slice(COLLECTION_PREFIX.length), file: r.file as Blob, at: r.at ?? 0 }))
+      .sort((a, b) => b.at - a.at)
+  } catch {
+    return []
+  }
+}
+
+export async function saveDiscArtToCollection(file: Blob): Promise<string> {
+  const id =
+    typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.floor(Math.random() * 1e9)}`
+  try {
+    const db = await openDb()
+    await put(db, META, { key: `${COLLECTION_PREFIX}${id}`, file, at: Date.now() })
+  } catch {
+    /* private mode / quota — the collection simply stays as it is */
+  }
+  return id
+}
+
+export async function deleteDiscArtFromCollection(id: string): Promise<void> {
+  try {
+    const db = await openDb()
+    await new Promise<void>((res, rej) => {
+      const tx = db.transaction(META, 'readwrite')
+      tx.objectStore(META).delete(`${COLLECTION_PREFIX}${id}`)
+      tx.oncomplete = () => res()
+      tx.onerror = () => rej(tx.error)
+    })
+  } catch {
+    /* already gone, or the store is unreachable */
+  }
+}
+
+export async function clearDiscArtCollection(): Promise<void> {
+  try {
+    const db = await openDb()
+    await new Promise<void>((res, rej) => {
+      const tx = db.transaction(META, 'readwrite')
+      tx.objectStore(META).delete(collectionRange())
+      tx.oncomplete = () => res()
+      tx.onerror = () => rej(tx.error)
+    })
+  } catch {
+    /* nothing to clear, or the store is unreachable */
+  }
+}
+
+/* ---- custom Butterchurn presets ----
+   .milk files converted in the browser (see the Butterchurn visualiser).
+   One record per preset, under a shared key prefix like the disc-art
+   collection: the name is the key's tail, the value is the converted JSON. */
+
+export interface CustomBcPreset {
+  name: string
+  preset: unknown
+}
+
+const BC_CUSTOM_PREFIX = 'bcCustom:'
+const bcCustomRange = () => IDBKeyRange.bound(BC_CUSTOM_PREFIX, `${BC_CUSTOM_PREFIX}\uffff`)
+
+export async function listCustomBcPresets(): Promise<CustomBcPreset[]> {
+  try {
+    const db = await openDb()
+    const recs = await new Promise<{ key: string; preset: unknown }[]>((res, rej) => {
+      const req = db.transaction(META, 'readonly').objectStore(META).getAll(bcCustomRange())
+      req.onsuccess = () => res(req.result ?? [])
+      req.onerror = () => rej(req.error)
+    })
+    return recs
+      .filter((r) => r.preset && typeof r.preset === 'object')
+      .map((r) => ({ name: r.key.slice(BC_CUSTOM_PREFIX.length), preset: r.preset }))
+  } catch {
+    return []
+  }
+}
+
+export async function saveCustomBcPreset(name: string, preset: unknown): Promise<void> {
+  try {
+    const db = await openDb()
+    await put(db, META, { key: `${BC_CUSTOM_PREFIX}${name}`, preset })
+  } catch {
+    /* private mode / quota — the preset stays session-only */
+  }
+}
+
+export async function deleteCustomBcPreset(name: string): Promise<void> {
+  try {
+    const db = await openDb()
+    await new Promise<void>((res, rej) => {
+      const tx = db.transaction(META, 'readwrite')
+      tx.objectStore(META).delete(`${BC_CUSTOM_PREFIX}${name}`)
+      tx.oncomplete = () => res()
+      tx.onerror = () => rej(tx.error)
+    })
+  } catch {
+    /* already gone, or the store is unreachable */
+  }
+}
+
 /* ---- local lyrics ----
    One record per track. `ttml` is the only format stored, because handing it
    to the component's `ttml` property renders the lyrics with ZERO network

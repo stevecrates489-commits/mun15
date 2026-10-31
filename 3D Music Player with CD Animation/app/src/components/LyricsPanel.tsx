@@ -36,6 +36,9 @@ const HIDE_CHROME = `
     visibility: hidden !important;
     pointer-events: none !important;
   }
+  /* the component's own dry "No lyrics found." — the panel draws its own
+     placeholder instead */
+  .no-lyrics { display: none !important; }
 `
 
 /* the stage position (CD hidden) reads as a showcase, so its lines are
@@ -68,6 +71,19 @@ const TEXT_CHROME = `
   }
 `
 
+/* The component's BACKGROUND VOCALS — echo lines (ttm:role="x-bg" spans in
+   the source TTML, which lrc.red includes for many pop tracks) — render in
+   a `height: 0; overflow: visible` container, so the 0.7em copy paints
+   DIRECTLY over the neighbouring line's glyphs, entering from above or
+   below (`background-before` / `background-after`). That is the "second
+   layer over the lyrics": character-interleaved ghost text that comes and
+   goes as the echo timestamps hit. The component always renders these
+   containers (see its "Always render background vocals in the DOM" note),
+   so the hide has to live in the sheet, not in the data. */
+const BG_HIDE_CHROME = `
+  .background-vocal-container { display: none !important; }
+`
+
 const MOTION_CHROME = `
   .lyrics-line {
     transition: transform 280ms cubic-bezier(0.22, 1, 0.36, 1),
@@ -85,6 +101,67 @@ const MOTION_CHROME = `
       transform: none !important;
       filter: none !important;
     }
+  }
+`
+
+/* STRICT WHITE — the default face of the lyrics. The sheet decides the two
+   COLOURS the component's own progression runs in and nothing else:
+
+     unsung  -> --lyplus-text-secondary   (a 45%-transparent mix of primary)
+     sung    -> --lyplus-text-primary     (a wipe gradient swept across the
+                                           syllable, or per character when
+                                           the lyric is word-synced)
+
+   That dim→bright sweep IS the highlight, and it is painted through
+   `background-clip: text` — a BACKGROUND, not the text colour. Forcing
+   `color` / `-webkit-text-fill-color` over the spans painted the glyphs
+   with an opaque fill on top of that background, so the wipe could never
+   show: the whole line lit up at once. Nothing is overridden here but the
+   palette, and it is written on `:host`: the component declares
+   `--lyplus-text-primary` there as `var(--lyplus-lyrics-palette)`, so a
+   colour set on `.lyrics-line` is substituted too late to reach it.
+
+   PLAIN, and declared `!important`, on purpose: this is the only face the
+   lyrics have, so nothing may re-tint it — in particular the
+   `--highlight-color` the component writes inline on the host. The unsung
+   colour is restated as a translucent white (the component's default is a
+   45% mix of the primary), and the glow radius is zeroed so the words are
+   flat white with no sheen. */
+const WHITE_CHROME = `
+  :host {
+    --am-lyrics-highlight-color: #ffffff !important;
+    --highlight-color: #ffffff !important;
+    --lyplus-text-secondary: color-mix(in srgb, #ffffff 55%, transparent) !important;
+    --am-lyrics-glow-radius: 0px !important;
+  }
+`
+
+/* ONE face: plain white — EXCEPT the metallic one a PINNED lyric wears while
+   the disc is on the stage (the rules live in Home: CD off always wins white,
+   unpinned is always white, pinned + disc = metal). The metal face recasts
+   the component's own dim→bright wipe palette in chrome — unsung syllables
+   cool silver, the sung sweep bright nickel — and adds an embossed pair of
+   shadows (light edge above, dark bevel below) for the pressed-metal grain.
+
+   DELIBERATELY no `background-clip: text` gradient: the first metal face
+   used one, and in WebView2 (the Tauri runtime) the clipped-gradient glyph
+   layer desyncs from the line's transformed children — the text painted
+   TWICE, a dim ghost copy at the pre-transform position, ONLY while pinned
+   (this sheet is the only pinned-only CSS). The palette + emboss below
+   reads metallic without touching that paint path. */
+const METAL_CHROME = `
+  :host {
+    --am-lyrics-highlight-color: #f4f7fa !important;
+    --highlight-color: #f4f7fa !important;
+    --lyplus-text-secondary: color-mix(in srgb, #a9b3bf 70%, transparent) !important;
+    --lyplus-text-primary: #f6f8fb !important;
+    --am-lyrics-glow-radius: 0px !important;
+  }
+  .lyrics-line,
+  .lyrics-line-container {
+    text-shadow:
+      0 1px 0 rgba(255, 255, 255, 0.22),
+      0 -1px 1px rgba(9, 13, 19, 0.38) !important;
   }
 `
 
@@ -129,6 +206,10 @@ interface Props {
      for a locally pinned lyric, and for the radio, whose lyrics come from
      the song clock's own source */
   ttml?: string | null
+  /* the metallic face — a PINNED lyric while the disc is on the stage. Home
+     owns the rule (CD off and unpinned both force white); this only picks
+     the sheet. */
+  metal?: boolean
   /* filled with the imperative controls the settings panel and editor drive */
   apiRef: React.RefObject<LyricsApi | null>
 }
@@ -165,6 +246,7 @@ export default function LyricsPanel({
   brightness,
   offset,
   ttml,
+  metal = false,
   apiRef,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
@@ -198,9 +280,30 @@ export default function LyricsPanel({
   /* undefined until metadata lands: a 0 duration would still count as a
      CHANGE once the real one arrives, rebuilding the element and re-fetching */
   const ms = duration > 0 ? Math.round(duration * 1000) : undefined
+
+  /* ---- the artist the providers are asked for ----
+     Multi-artist tracks ("A, B, C") keep their FULL artist in the library,
+     but the providers match on one name far more reliably than on a bill —
+     so the first ask carries the whole string, and when the search window
+     has passed with nothing found, the element is rebuilt once against the
+     primary artist before the panel admits defeat. */
+  const primaryArtist = artist.split(/[&,;]/)[0]?.trim() ?? artist
+  const [artistFallback, setArtistFallback] = useState<string | null>(null)
+  const [fallbackFor, setFallbackFor] = useState(artist)
+  if (fallbackFor !== artist) {
+    setFallbackFor(artist)
+    if (artistFallback !== null) setArtistFallback(null)
+  }
+  const effArtist = artistFallback ?? artist
+  const artistIsSplit = !!primaryArtist && primaryArtist !== artist.trim()
+
   /* the song's identity: also what a stored lyric changes, so "scrolled away"
      never survives a pinned/unpinned switch either */
-  const songKey = `${ttml ? 'tt' : ''}${title}\u0000${artist}`
+  const songKey = `${ttml ? 'tt' : ''}${title}\u0000${effArtist}`
+  /* the empty-state verdict's identity: the SONG, not the pinned/unpinned
+     state. Pinning a lyric mid-search used to flip `songKey`, which cleared
+     the verdict and blinked the placeholder away. */
+  const emptyKey = `${title}\u0000${artist}`
 
   useEffect(() => {
     const host = hostRef.current
@@ -221,10 +324,10 @@ export default function LyricsPanel({
          driven entirely by `currentTime`, which the playhead below feeds it
          from the clock. */
       el.songTitle = title
-      el.songArtist = artist
+      el.songArtist = effArtist
     } else {
       el.songTitle = title
-      el.songArtist = artist
+      el.songArtist = effArtist
       el.songDurationMs = ms
       el.duration = ms
       /* free-text fallback for the providers that only take a query */
@@ -247,22 +350,6 @@ export default function LyricsPanel({
       if (typeof t === 'number') seekRef.current(t / 1000)
     }
     el.addEventListener('line-click', onLineClick)
-
-    /* strip the built-in chrome. Kept in a constructed sheet and adopted on a
-       frame (Lit installs its own styles in a microtask after connect, so
-       adopting earlier would be overwritten). CSS, not DOM pokes: the footer
-       only exists once a fetch lands, and a style rule applies whenever it
-       appears */
-    const sheet = new CSSStyleSheet()
-    sheet.replaceSync(
-      HIDE_CHROME + TEXT_CHROME + MOTION_CHROME + (mode === 'stage' ? CENTER_CHROME : ''),
-    )
-    const raf = requestAnimationFrame(() => {
-      const root = el.shadowRoot
-      if (root && !root.adoptedStyleSheets.includes(sheet)) {
-        root.adoptedStyleSheets = [...root.adoptedStyleSheets, sheet]
-      }
-    })
 
     /* the controls worth keeping, driven from the lyrics settings panel */
     const priv = el as unknown as AmLyricsPriv
@@ -288,7 +375,22 @@ export default function LyricsPanel({
           return ''
         }
       },
-      hasLyrics: () => !!el.shadowRoot?.querySelector('.lyrics-line'),
+      /* REAL lyrics only: the component renders `.skeleton-line`s while it
+         searches and a `.no-lyrics` panel when it gives up, and an
+         instrumental gap is a `.lyrics-line` with no text at all. The FOOTER
+         ("Source Unavailable · am-lyrics v1.8.2 …") also masquerades as a
+         `.lyrics-line` once a fetch has resolved — counting it made every
+         failed search read as "found", so the no-lyrics placeholder could
+         never appear. Counting any of these as "found" cleared the panel's
+         own no-lyrics artwork a second after it appeared. */
+      hasLyrics: () => {
+        const root = el.shadowRoot
+        if (!root) return false
+        const lines = root.querySelectorAll<HTMLElement>(
+          '.lyrics-line:not(.lyrics-gap):not(.lyrics-footer)',
+        )
+        return [...lines].some((l) => (l.textContent ?? '').trim().length > 0)
+      },
       resumeScroll: () => {
         const root = el.shadowRoot
         const c = root?.querySelector('.lyrics-container') as HTMLElement | null
@@ -320,13 +422,44 @@ export default function LyricsPanel({
     setScrolled(false)
 
     return () => {
-      cancelAnimationFrame(raf)
       el.removeEventListener('line-click', onLineClick)
       elRef.current = null
       apiRef.current = null
       el.remove()
     }
-  }, [title, artist, ms, ttml, apiRef, mode, live])
+  }, [title, effArtist, ms, ttml, apiRef, mode, live])
+
+  /* the app's sheet — installed after every build. A dedicated effect, so
+     re-installing it never rebuilds the element (a rebuild would refetch the
+     lyrics). The adopt lands on a frame: Lit installs its own styles in a
+     microtask after connect, so adopting earlier would be overwritten. CSS,
+     not DOM pokes: the footer only exists once a fetch lands, and a style
+     rule applies whenever it appears.
+
+     One sheet is remembered so the next adopt can drop it: a new one is
+     built whenever the song, the position or the panel's own chrome changes,
+     and a leftover sheet would keep its `!important` palette in the
+     cascade. */
+  const ownedSheetsRef = useRef<CSSStyleSheet[]>([])
+  useEffect(() => {
+    const sheet = new CSSStyleSheet()
+    sheet.replaceSync(
+      HIDE_CHROME +
+        TEXT_CHROME +
+        MOTION_CHROME +
+        BG_HIDE_CHROME +
+        (mode === 'stage' ? CENTER_CHROME : '') +
+        (metal ? METAL_CHROME : WHITE_CHROME),
+    )
+    const raf = requestAnimationFrame(() => {
+      const root = elRef.current?.shadowRoot
+      if (!root) return
+      const owned = ownedSheetsRef.current
+      root.adoptedStyleSheets = [...root.adoptedStyleSheets.filter((s) => !owned.includes(s)), sheet]
+      ownedSheetsRef.current = [sheet]
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [title, artist, ms, ttml, mode, live, metal])
 
   /* Playhead. One sync while paused, a frame loop while playing — the same
      pattern the component's own README recommends. Never React state: a tick
@@ -413,6 +546,53 @@ export default function LyricsPanel({
     if (scrolled) setScrolled(false)
   }
 
+  /* ---- the empty state, as a strict phase machine ----
+     searching → the providers are still being asked (their skeletons show
+                 through the shadow DOM; the panel adds its own status line)
+     found     → real lyrics are on the page — never a placeholder
+     none      → the search window has passed with nothing: ONLY here does
+                 the cute placeholder appear
+
+     The old single flag could show the placeholder during a slow fetch
+     (the window ran out while the provider was still thinking) and sit
+     stale while a late lyric arrived. The interval keeps running, so a
+     'none' verdict still recovers to 'found' the moment lyrics land. */
+  type LyricPhase = 'searching' | 'found' | 'none'
+  const [phaseFor, setPhaseFor] = useState(emptyKey)
+  const [phase, setPhase] = useState<LyricPhase>('searching')
+  if (phaseFor !== emptyKey) {
+    setPhaseFor(emptyKey)
+    setPhase('searching')
+  }
+  useEffect(() => {
+    let alive = true
+    let tries = 0
+    const iv = window.setInterval(() => {
+      if (!alive) return
+      tries += 1
+      const found = apiRef.current?.hasLyrics() ?? false
+      if (found) {
+        setPhase('found')
+        return
+      }
+      if (tries >= 12) {
+        /* the search window has passed. Before admitting defeat, a multi-artist
+           track gets ONE more ask under its primary artist — the rebuild is
+           what triggers it (a new songKey), and the verdict below is keyed to
+           the song, so it only lands when the fallback also came up empty. */
+        if (artistIsSplit && artistFallback === null && !ttml && !live) {
+          setArtistFallback(primaryArtist)
+          return
+        }
+        setPhase('none')
+      }
+    }, 900)
+    return () => {
+      alive = false
+      window.clearInterval(iv)
+    }
+  }, [emptyKey, apiRef, artistIsSplit, artistFallback, primaryArtist, ttml, live])
+
   const vars = {
     '--lyplus-font-size-base': `${size}px`,
     '--am-lyrics-line-height': mode === 'stage' ? '1.16' : '1.22',
@@ -449,6 +629,45 @@ export default function LyricsPanel({
           WebkitMaskImage: 'linear-gradient(180deg,transparent,black 9%,black 91%,transparent)',
         }}
       />
+      {/* searching — a quiet status line while the providers are asked.
+          Pinned/TTML lyrics arrive without a fetch, so no status for them. */}
+      {phase === 'searching' && !ttml && (
+        <div className="pointer-events-none absolute bottom-2 left-1/2 z-10 -translate-x-1/2">
+          <span className="flex animate-pulse items-center gap-1.5 rounded-full border border-white/10 bg-black/60 px-3 py-1 font-mono text-[7px] tracking-[0.25em] text-white/50 backdrop-blur-md">
+            SEARCHING FOR LYRICS…
+          </span>
+        </div>
+      )}
+      {/* no lyrics — a friendly beat, not a dry error. Strictly AFTER the
+          search has given up, never during it. */}
+      {phase === 'none' && (
+        <div className="pointer-events-none absolute inset-0 z-10 grid place-items-center">
+          <div className="pop-in flex flex-col items-center gap-3">
+            <svg width="72" height="72" viewBox="0 0 72 72" fill="none" aria-hidden>
+              {/* the record */}
+              <circle cx="32" cy="40" r="20" stroke="rgba(255,255,255,0.55)" strokeWidth="2" />
+              <circle cx="32" cy="40" r="13" stroke="rgba(255,255,255,0.22)" strokeWidth="1.5" />
+              <circle cx="32" cy="40" r="6" stroke="rgba(255,255,255,0.55)" strokeWidth="2" />
+              <circle cx="32" cy="40" r="1.8" fill="rgba(255,255,255,0.8)" />
+              {/* the note, riding out of the groove */}
+              <path
+                d="M47 18v16.5a5.5 5.5 0 1 1-2.6-4.66c1-.6 2.6-.7 2.6-.7V18h10.2a7.4 7.4 0 0 0-2.4 5.6"
+                stroke="rgba(255,255,255,0.75)"
+                strokeWidth="2.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <path d="M47 18l12 2.6" stroke="rgba(255,255,255,0.75)" strokeWidth="2.2" strokeLinecap="round" />
+            </svg>
+            <span className="font-mono text-[10px] tracking-[0.3em] text-white/60">
+              JUST VIBING TO THE BEAT 🎵
+            </span>
+            <span className="font-mono text-[8px] tracking-[0.2em] text-white/30">
+              NO LYRICS FOR THIS ONE — ENJOY THE SOUND
+            </span>
+          </div>
+        </div>
+      )}
       {/* the countdown itself: a pill naming where the view is headed, with
           the 3-second bar filling along its bottom edge */}
       {scrolled && (

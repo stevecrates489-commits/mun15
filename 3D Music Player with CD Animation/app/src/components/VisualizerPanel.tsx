@@ -92,7 +92,7 @@ export default function VisualizerPanel({
 
   return (
     <div
-      className={`settings-panel fx-blur fixed bottom-[calc(13%+46px)] left-[5%] z-[89] flex max-h-[min(70vh,560px)] w-[min(88vw,460px)] flex-col rounded-2xl border border-white/15 bg-black/55 backdrop-blur-xl${
+      className={`settings-panel fx-blur fixed left-[5%] top-[4.5rem] z-[89] flex max-h-[min(70vh,560px)] w-[min(88vw,460px)] flex-col rounded-2xl border border-white/20 bg-black/75 shadow-[0_24px_70px_rgba(0,0,0,0.65),inset_0_1px_0_rgba(255,255,255,0.08)] backdrop-blur-2xl${
         closing ? ' is-closing' : ''
       }`}
     >

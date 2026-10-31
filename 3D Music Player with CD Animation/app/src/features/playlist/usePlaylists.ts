@@ -50,6 +50,14 @@ function load(): PlaylistFolder[] {
   }
 }
 
+/* Downloads Online is a SYSTEM playlist: present from the first launch and
+   recreated the moment it is missing, so the download sync (and the user)
+   always has a place where online downloads land. */
+function ensureDownloads(folders: PlaylistFolder[]): PlaylistFolder[] {
+  if (folders.some((f) => f.id === DOWNLOADS_FOLDER_ID)) return folders
+  return [{ id: DOWNLOADS_FOLDER_ID, name: DOWNLOADS_FOLDER_NAME, trackIds: [] }, ...folders]
+}
+
 function persist(folders: PlaylistFolder[]) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(folders))
@@ -59,7 +67,7 @@ function persist(folders: PlaylistFolder[]) {
 }
 
 export function usePlaylists() {
-  const [folders, setFolders] = useState<PlaylistFolder[]>(load)
+  const [folders, setFolders] = useState<PlaylistFolder[]>(() => ensureDownloads(load()))
 
   useEffect(() => {
     persist(folders)
@@ -118,6 +126,10 @@ export function usePlaylists() {
   }, [])
 
   const deleteFolder = useCallback((id: number) => {
+    /* the system playlist for downloads is not deletable: the download sync
+       files into it by id, so a user delete would only be undone by the next
+       download anyway. The UI hides the option too; this is the backstop. */
+    if (id === DOWNLOADS_FOLDER_ID) return
     setFolders((prev) => prev.filter((f) => f.id !== id))
   }, [])
 

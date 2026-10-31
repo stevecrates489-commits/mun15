@@ -1,84 +1,7 @@
-import { useEffect, useState } from 'react'
-import { X, Plus } from 'lucide-react'
-import { readFrameBars, writeFrameBars } from '../lib/frameBars'
+import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { X, Plus, Images, Trash2 } from 'lucide-react'
 import { MAX_SECONDS as WALL_MAX_SECONDS, FPS_MIN, FPS_MAX, type WallPreset, type WallpaperRecord } from '../lib/wallpaperPipeline'
-
-/* Glass quality (item: "be careful with backdrop-filter"). A blur is
-   re-evaluated against its backdrop whenever the backdrop changes, and a live
-   wallpaper changes it every frame — so this one switch trades the frosted
-   panes for their flat dark fills across the whole app. The governor drops
-   the same thing automatically when frames go bad; this is for the user who
-   would rather keep them anyway. */
-function GlassSwitch() {
-  const [on, setOn] = useState(() => localStorage.getItem('md-glass') !== 'off')
-  useEffect(() => {
-    document.documentElement.dataset.glass = on ? 'on' : 'off'
-    localStorage.setItem('md-glass', on ? 'on' : 'off')
-  }, [on])
-  return (
-    <div className="mb-3">
-      <div className="mb-1 flex items-center justify-between">
-        <span className="font-mono text-[8px] tracking-[0.2em] text-white/35">GLASS PANELS</span>
-        <span className="font-mono text-[8px] text-white/40">{on ? 'BLURRED' : 'SOLID'}</span>
-      </div>
-      <div className="grid grid-cols-2 gap-1.5">
-        <button
-          onClick={() => setOn(true)}
-          className={`rounded-lg py-1.5 font-mono text-[9px] tracking-[0.1em] transition ${
-            on ? 'bg-white/90 text-black' : 'bg-white/5 text-white/50 hover:bg-white/10 hover:text-white'
-          }`}
-        >
-          BLURRED
-        </button>
-        <button
-          onClick={() => setOn(false)}
-          className={`rounded-lg py-1.5 font-mono text-[9px] tracking-[0.1em] transition ${
-            !on ? 'bg-white/90 text-black' : 'bg-white/5 text-white/50 hover:bg-white/10 hover:text-white'
-          }`}
-        >
-          SOLID · FAST
-        </button>
-      </div>
-    </div>
-  )
-}
-
-/* The frame bars: black bars over the wallpaper, under the interface, that
-   breathe with the bass. They used to be baked into the wallpaper files —
-   letterboxing, different on every screen. Opt in here. */
-function FrameBarsSwitch() {
-  const [on, setOn] = useState(readFrameBars)
-  const toggle = (next: boolean) => {
-    setOn(next)
-    writeFrameBars(next)
-  }
-  return (
-    <div className="mb-3">
-      <div className="mb-1 flex items-center justify-between">
-        <span className="font-mono text-[8px] tracking-[0.2em] text-white/35">FRAME BARS</span>
-        <span className="font-mono text-[8px] text-white/40">{on ? 'BEAT-REACTIVE' : 'OFF'}</span>
-      </div>
-      <div className="grid grid-cols-2 gap-1.5">
-        <button
-          onClick={() => toggle(true)}
-          className={`rounded-lg py-1.5 font-mono text-[9px] tracking-[0.1em] transition ${
-            on ? 'bg-white/90 text-black' : 'bg-white/5 text-white/50 hover:bg-white/10 hover:text-white'
-          }`}
-        >
-          ON
-        </button>
-        <button
-          onClick={() => toggle(false)}
-          className={`rounded-lg py-1.5 font-mono text-[9px] tracking-[0.1em] transition ${
-            !on ? 'bg-white/90 text-black' : 'bg-white/5 text-white/50 hover:bg-white/10 hover:text-white'
-          }`}
-        >
-          OFF
-        </button>
-      </div>
-    </div>
-  )
-}
 
 /* Wallpaper settings card (bottom-right): pick quality → pick fps → press
    CONVERT (selection is inert; the hook only converts on onConvert), speed,
@@ -185,6 +108,43 @@ export default function WallpaperSettingsPanel({
     return () => window.clearTimeout(t)
   }, [closing, onClosed])
 
+  /* ---- the "Your Wallpapers" flyout ----
+     Same mechanism as the CD Collection's: opens on hover of the row,
+     rendered through a portal so the panel's overflow can never clip it.
+     It opens to the LEFT — the panel sits against the right edge of the
+     window, so there is no room on its right. Leaving either the row or
+     the flyout starts a short close timer; crossing the gap keeps it up. */
+  const [flyout, setFlyout] = useState(false)
+  const [anchor, setAnchor] = useState<{ top: number; left: number } | null>(null)
+  const rowRef = useRef<HTMLDivElement>(null)
+  const closeTimer = useRef(0)
+  const FLYOUT_W = 288
+  const openFlyout = () => {
+    window.clearTimeout(closeTimer.current)
+    const r = rowRef.current?.getBoundingClientRect()
+    if (r) {
+      setAnchor({
+        top: Math.max(8, Math.min(r.top - 8, window.innerHeight - 420)),
+        left: Math.max(8, r.left - 10 - FLYOUT_W),
+      })
+    }
+    setFlyout(true)
+  }
+  const scheduleClose = () => {
+    window.clearTimeout(closeTimer.current)
+    closeTimer.current = window.setTimeout(() => setFlyout(false), 260)
+  }
+  useEffect(() => () => window.clearTimeout(closeTimer.current), [])
+
+  /* CLEAR ALL is armed by the first press and wiped by the second, so a
+     slip of the finger cannot take the whole vault with it */
+  const [armed, setArmed] = useState(false)
+  useEffect(() => {
+    if (!armed) return
+    const t = window.setTimeout(() => setArmed(false), 3000)
+    return () => window.clearTimeout(t)
+  }, [armed])
+
   /* release anything the vault has dropped, then hand back a live URL per
      record — stable across renders and across a StrictMode remount */
   pruneThumbCache(new Set(savedWallpapers.map((r) => r.id)))
@@ -192,7 +152,7 @@ export default function WallpaperSettingsPanel({
 
   return (
     <div
-      className={`settings-panel fx-blur fixed bottom-[calc(13%+46px)] right-[5%] z-[87] w-72 rounded-2xl border border-white/15 bg-black/85 p-4 backdrop-blur-md${closing ? ' is-closing' : ''}`}
+      className={`settings-panel fx-blur fixed bottom-[calc(13%+46px)] right-[5%] z-[87] max-h-[calc(100vh-180px)] w-72 overflow-y-auto overscroll-contain rounded-2xl border border-white/15 bg-black/85 p-4 backdrop-blur-md${closing ? ' is-closing' : ''}`}
     >
       <div className="mb-3 flex items-center justify-between">
         <span className="font-mono text-[9px] tracking-[0.25em] text-white/50">WALLPAPER SETTINGS</span>
@@ -268,9 +228,6 @@ export default function WallpaperSettingsPanel({
       )}
 
       {/* CONVERT — fixed space so the panel never jumps between states */}
-      <GlassSwitch />
-      <FrameBarsSwitch />
-
       <div className="mb-4 flex min-h-[34px] items-stretch">
         {canConvert ? (
           <button
@@ -339,71 +296,131 @@ export default function WallpaperSettingsPanel({
         </button>
       </div>
 
-      <div className="mb-3">
-        <div className="mb-1.5">
-          <span className="font-mono text-[8px] tracking-[0.2em] text-white/35">
-            SAVED WALLPAPERS{savedWallpapers.length > 0 ? ` · ${savedWallpapers.length}` : ''}
-          </span>
-        </div>
-        {savedWallpapers.length === 0 && (
-          <div className="rounded-lg border border-dashed border-white/10 px-2.5 py-2 font-mono text-[8px] tracking-[0.1em] text-white/30">
-            NO SAVED WALLPAPERS YET
-          </div>
-        )}
-        {savedWallpapers.length > 0 && (
-          <div className="max-h-[180px] space-y-1.5 overflow-y-auto pr-1" style={{ scrollbarWidth: 'thin', scrollbarColor: 'rgba(255,255,255,0.15) transparent' }}>
-            {savedWallpapers.map((rec) => (
-              <div
-                key={rec.id}
-                className="group flex cursor-pointer items-center gap-2.5 rounded-lg border border-white/10 bg-white/[0.03] px-2 py-1.5 transition-colors hover:bg-white/[0.07]"
-                onClick={() => onSwitchWallpaper(rec)}
-              >
-                {rec.poster || rec.blob.type.startsWith('image/') ? (
-                  <img
-                    src={thumbUrls.get(rec.id) ?? ''}
-                    alt=""
-                    draggable={false}
-                    className="h-8 w-14 shrink-0 rounded object-cover"
-                  />
-                ) : (
-                  <div className="h-8 w-14 shrink-0 rounded bg-white/5" />
-                )}
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[11px] font-semibold text-white/70 group-hover:text-white">
-                    {rec.name || 'Untitled'}
-                  </span>
-                  <span className="block font-mono text-[8px] text-white/30">
-                    {rec.blob.type.startsWith('image/')
-                      ? `image · ${(rec.size / 1e6).toFixed(1)}MB`
-                      : `${rec.width}×${rec.height} · ${rec.fps}fps · ${(rec.size / 1e6).toFixed(1)}MB`}
-                    {!rec.converted && !rec.blob.type.startsWith('image/') && ' · original'}
-                    {rec.hdr && ' · HDR'}
-                  </span>
-                </span>
-                <button
-                  aria-label={`Delete ${rec.name}`}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    onRemoveSaved(rec.id)
-                  }}
-                  className="shrink-0 text-white/25 transition-colors hover:text-red-400"
-                >
-                  <X size={11} />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-        {/* ADD — full-width outline button, same visual language as the panel's
-            other controls; the old corner pill next to the label was cramped */}
-        <button
-          onClick={onAddNew}
-          className="mt-1.5 flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-white/25 px-3 py-1.5 font-mono text-[8px] tracking-[0.2em] text-white/55 transition hover:border-white/45 hover:text-white"
-        >
-          <Plus size={10} />
-          ADD WALLPAPER
-        </button>
+      {/* your wallpapers — a hover flyout (to the LEFT, portal-rendered)
+          instead of an in-panel list: a vault of videos used to stretch the
+          panel until its close button ran off the window. The panel keeps
+          only the row and the ADD button. */}
+      <div
+        ref={rowRef}
+        onMouseEnter={openFlyout}
+        onMouseLeave={scheduleClose}
+        className={`mb-2 flex cursor-default items-center justify-between rounded-lg bg-white/[0.03] px-2 py-1.5 transition ${
+          flyout ? 'bg-white/10' : 'hover:bg-white/[0.07]'
+        }`}
+        aria-haspopup="true"
+        aria-expanded={flyout}
+      >
+        <span className="flex items-center gap-1.5 font-mono text-[9px] tracking-[0.15em] text-white/50">
+          <Images size={10} />
+          YOUR WALLPAPERS
+        </span>
+        <span className="font-mono text-[8px] text-white/30">{savedWallpapers.length}</span>
       </div>
+
+      {flyout &&
+        anchor &&
+        createPortal(
+          <div
+            role="dialog"
+            aria-label="Saved wallpapers"
+            onMouseEnter={() => window.clearTimeout(closeTimer.current)}
+            onMouseLeave={scheduleClose}
+            className="fixed z-[95] max-h-[calc(100vh-20px)] w-72 overflow-y-auto overscroll-contain rounded-xl border border-white/15 bg-black/80 p-2.5 shadow-[0_24px_60px_rgba(0,0,0,0.75)] backdrop-blur-md"
+            style={{ top: anchor.top, left: anchor.left }}
+          >
+            <div className="mb-2 flex items-center justify-between">
+              <button
+                onClick={() => {
+                  if (!armed) {
+                    setArmed(true)
+                    return
+                  }
+                  setArmed(false)
+                  for (const rec of savedWallpapers) onRemoveSaved(rec.id)
+                }}
+                onBlur={() => setArmed(false)}
+                disabled={savedWallpapers.length === 0}
+                aria-label={armed ? 'Confirm: remove every saved wallpaper' : 'Remove every saved wallpaper'}
+                className={`rounded-lg px-2 py-1 font-mono text-[8px] tracking-[0.12em] transition disabled:opacity-30 ${
+                  armed
+                    ? 'bg-rose-400/90 text-black'
+                    : 'bg-white/5 text-white/50 hover:bg-white/10 hover:text-white'
+                }`}
+              >
+                {armed ? 'SURE?' : 'CLEAR ALL'}
+              </button>
+              <span className="font-mono text-[8px] tracking-[0.12em] text-white/35">
+                {savedWallpapers.length} SAVED
+              </span>
+            </div>
+
+            {savedWallpapers.length === 0 ? (
+              <div className="px-2 py-6 text-center font-mono text-[8px] leading-relaxed tracking-[0.15em] text-white/30">
+                NOTHING SAVED YET
+                <br />
+                <span className="text-white/20">CONVERT OR IMPORT A WALLPAPER — IT LANDS HERE</span>
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                {savedWallpapers.map((rec) => (
+                  <div
+                    key={rec.id}
+                    className="group flex cursor-pointer items-center gap-2.5 rounded-lg border border-white/10 bg-white/[0.03] px-2 py-1.5 transition-colors hover:bg-white/[0.07]"
+                    onClick={() => onSwitchWallpaper(rec)}
+                  >
+                    {rec.poster || rec.blob.type.startsWith('image/') ? (
+                      <img
+                        src={thumbUrls.get(rec.id) ?? ''}
+                        alt=""
+                        draggable={false}
+                        className="h-8 w-14 shrink-0 rounded object-cover"
+                      />
+                    ) : (
+                      <div className="h-8 w-14 shrink-0 rounded bg-white/5" />
+                    )}
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[11px] font-semibold text-white/70 group-hover:text-white">
+                        {rec.name || 'Untitled'}
+                      </span>
+                      <span className="block font-mono text-[8px] text-white/30">
+                        {rec.blob.type.startsWith('image/')
+                          ? `image · ${(rec.size / 1e6).toFixed(1)}MB`
+                          : `${rec.width}×${rec.height} · ${rec.fps}fps · ${(rec.size / 1e6).toFixed(1)}MB`}
+                        {!rec.converted && !rec.blob.type.startsWith('image/') && ' · original'}
+                        {rec.hdr && ' · HDR'}
+                      </span>
+                    </span>
+                    <button
+                      aria-label={`Delete ${rec.name}`}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onRemoveSaved(rec.id)
+                      }}
+                      className="shrink-0 text-white/25 transition-colors hover:text-red-400"
+                    >
+                      <X size={11} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <p className="mt-2 flex items-center gap-1 font-mono text-[7px] leading-relaxed tracking-[0.1em] text-white/25">
+              <Trash2 size={8} />
+              CLICK A WALLPAPER TO WEAR IT · X DELETES IT
+            </p>
+          </div>,
+          document.body,
+        )}
+
+      {/* ADD — full-width outline button, same visual language as the panel's
+          other controls; the old corner pill next to the label was cramped */}
+      <button
+        onClick={onAddNew}
+        className="mb-3 flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-white/25 px-3 py-1.5 font-mono text-[8px] tracking-[0.2em] text-white/55 transition hover:border-white/45 hover:text-white"
+      >
+        <Plus size={10} />
+        ADD WALLPAPER
+      </button>
 
       {videoPresent && (
         <button

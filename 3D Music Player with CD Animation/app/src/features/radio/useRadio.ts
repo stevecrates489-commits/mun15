@@ -131,6 +131,13 @@ const writeJson = (key: string, value: unknown) => {
  */
 export function useRadio(onStart: () => void) {
   const [known, setKnown] = useState<KnownStation[]>(() => readJson(KNOWN_KEY, []))
+  /* mirrors for the callbacks below: a favourite arriving from the search
+     table carries the station's own metadata, and a re-open without metadata
+     must keep the name the list already knows instead of the raw URL */
+  const knownRef = useRef<KnownStation[]>([])
+  useEffect(() => {
+    knownRef.current = known
+  }, [known])
   /* OFF by default: with it on, every stream that plays was saved into the
      known list under its raw address, and the list filled up with URLs
      instead of station names. Only starred stations are kept unless the
@@ -324,13 +331,17 @@ export function useRadio(onStart: () => void) {
       }
       urlRef.current = target
 
+      /* a station tuned again without metadata (a known-list row, a watchdog
+         re-open) keeps the name it already has — writing the URL into the
+         name field made a played station read as a bare link for ever */
+      const prior = knownRef.current.find((k) => k.url === target)
       const rec: KnownStation = {
-        uuid: meta?.uuid ?? target,
-        name: meta?.name ?? target,
+        uuid: meta?.uuid ?? prior?.uuid ?? target,
+        name: meta?.name ?? prior?.name ?? target,
         url: target,
-        codec: meta?.codec ?? '?',
-        bitrate: meta?.bitrate ?? 0,
-        country: meta?.country ?? '',
+        codec: meta?.codec ?? prior?.codec ?? '?',
+        bitrate: meta?.bitrate ?? prior?.bitrate ?? 0,
+        country: meta?.country ?? prior?.country ?? '',
         playedAt: Date.now(),
       }
       setCurrent(rec)
@@ -626,13 +637,30 @@ export function useRadio(onStart: () => void) {
     localStorage.setItem(ADD_ALL_KEY, on ? '1' : '0')
   }, [])
 
-  const toggleFavourite = useCallback((url: string) => {
-    setFavourites((prev) => {
-      const next = prev.includes(url) ? prev.filter((f) => f !== url) : [url, ...prev].slice(0, 100)
-      writeJson(FAV_KEY, next)
-      return next
-    })
-  }, [])
+  const toggleFavourite = useCallback(
+    (url: string, meta?: { uuid?: string; name: string; codec?: string; bitrate?: number; country?: string }) => {
+      setFavourites((prev) => {
+        const next = prev.includes(url) ? prev.filter((f) => f !== url) : [url, ...prev].slice(0, 100)
+        writeJson(FAV_KEY, next)
+        return next
+      })
+      /* the star in the SEARCH table carries the station's own metadata: a
+         station that was only ever starred is still a station this player
+         knows, and it lands in Known Stations the moment the star lands */
+      if (meta && !favourites.includes(url)) {
+        remember({
+          uuid: meta.uuid ?? url,
+          name: meta.name || url,
+          url,
+          codec: meta.codec ?? '?',
+          bitrate: meta.bitrate ?? 0,
+          country: meta.country ?? '',
+          playedAt: 0,
+        })
+      }
+    },
+    [favourites, remember],
+  )
 
   /* a library track taking over the output must drop the radio title with it —
      otherwise the lyrics panel keeps fetching the RADIO song and shows

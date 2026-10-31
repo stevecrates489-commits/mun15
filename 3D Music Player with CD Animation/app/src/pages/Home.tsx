@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Play, X, Maximize, Minimize, ImagePlus, SlidersHorizontal, Pencil, Mic2, Settings2, Radio, Pin, PinOff, ListMusic, Heart, Globe } from 'lucide-react'
+import { Play, X, Check, Maximize, Minimize, ImagePlus, SlidersHorizontal, Pencil, Mic2, Settings2, Radio, Pin, PinOff, ListMusic, Heart, Globe } from 'lucide-react'
 import { useLyrics, type LyricsMode } from '../features/lyrics/useLyrics'
+import { useLayoutBox, clampBox, type LayoutBox } from '../features/layout/useLayoutBox'
 import { useRadio, getRadioElement } from '../features/radio/useRadio'
 import { loadLocalLyrics, saveLocalLyrics, deleteLocalLyrics, loadTrackOffset, saveTrackOffset, deleteTrackOffset, type LocalLyrics } from '../lib/library'
 import { getCurrentWindow, currentMonitor, PhysicalSize, PhysicalPosition } from '@tauri-apps/api/window'
@@ -12,8 +13,8 @@ import { analyze } from 'web-audio-beat-detector'
 import { ensureEyeEngine } from '../lib/eyeEngine'
 import { signalBootReady } from '../lib/bootGate'
 import { cleanTitle } from '../lib/utils'
+import { useAccentFromArt } from '../lib/useAccent'
 import { safeMode } from '../lib/safeMode'
-import FrameBars from '../components/FrameBars'
 import discUrl from '../assets/disc.png'
 import chromeUrl from '../assets/chrome.png'
 import DiscCase from '../components/DiscCase'
@@ -33,6 +34,8 @@ import { visualizers as VOLT_STYLES } from '../features/voltviz/registry'
 import { FramePainter } from '../features/visualizer/frames'
 import LyricsPanel from '../components/LyricsPanel'
 import LyricsSettingsPanel from '../components/LyricsSettingsPanel'
+import CustomizePanel from '../components/CustomizePanel'
+import LayoutFrame from '../components/LayoutFrame'
 import LyricsEditor from '../components/LyricsEditor'
 import WallpaperSettingsPanel from '../components/WallpaperSettingsPanel'
 import PlaylistDrawer from '../components/PlaylistDrawer'
@@ -66,22 +69,27 @@ export default function Home() {
   const voltName = VOLT_STYLES.find((v) => v.id === volt.style)?.name ?? 'off'
   /* the mounted visual's own settings api, when its module has one */
   const [vizApi, setVizApi] = useState<Record<string, (...args: never[]) => unknown> | null>(null)
-  /* the radio's own switch for the same backdrop: ON restores the last
-     visual that was picked (or the first one), OFF sends it away — the
-     station's element is already on the deck's analyser, so a live station
-     drives the visual the moment it is on air */
-  const lastVoltRef = useRef<string | null>(null)
-  const toggleVolt = useCallback(
-    (on: boolean) => {
-      if (on) {
-        const pick = lastVoltRef.current ?? VOLT_STYLES[0]?.id ?? null
-        volt.setStyle(pick)
-      } else {
-        if (volt.style) lastVoltRef.current = volt.style
-        volt.setStyle(null)
-      }
-    },
-    [volt],
+  /* the radio panel's VISUAL switch: which audio the live visual listens
+     to — the station, or the deck. It is a SOURCE, not a power switch: the
+     visual itself is turned on and off in the visualiser panel, and this
+     must never touch it. Kept like the other display choices, so it
+     survives a reload. */
+  const [radioViz, setRadioViz] = useState(() => localStorage.getItem('md-radio-viz') === 'on')
+  useEffect(() => {
+    try {
+      localStorage.setItem('md-radio-viz', radioViz ? 'on' : 'off')
+    } catch {
+      /* private mode — the choice lasts for this session */
+    }
+  }, [radioViz])
+  /* the visualiser's audio source. Radio-requested: the station's own
+     analyser — but only while one is actually attached; otherwise the deck's,
+     so a persisted ON can never leave every visual reading a null analyser
+     (silence → the black-screen report). The frame source re-asks every
+     frame, so a station attaching later is picked up without a remount. */
+  const vizAnalyser = useCallback(
+    () => (radioViz ? (eng.getRadioAnalyser() ?? eng.getAnalyser()) : eng.getAnalyser()),
+    [radioViz, eng.getAnalyser, eng.getRadioAnalyser],
   )
 
   /* HIDE UI — the visual takes the whole window: every panel, button and
@@ -111,6 +119,28 @@ export default function Home() {
      batch produces cost one list read each. */
   const syncDannify = dannifySync.sync
   useEffect(() => onDannifyDownloadsDone(() => void syncDannify()), [syncDannify])
+  /* the manual path — the REFRESH button in the Downloads Online view. The
+     socket usually brings a finished download in by itself; the button is
+     the guaranteed one. The pass is serialized in the hook, so a click is
+     never swallowed by an in-flight pass, and the note says what it brought. */
+  const [dannifyRefreshing, setDannifyRefreshing] = useState(false)
+  const [dannifyNote, setDannifyNote] = useState<string | null>(null)
+  const refreshDownloads = useCallback(async () => {
+    setDannifyRefreshing(true)
+    try {
+      const n = await syncDannify()
+      setDannifyNote(n > 0 ? `+${n} ADDED` : 'UP TO DATE')
+    } catch {
+      setDannifyNote(null)
+    } finally {
+      setDannifyRefreshing(false)
+    }
+  }, [syncDannify])
+  useEffect(() => {
+    if (!dannifyNote) return
+    const t = window.setTimeout(() => setDannifyNote(null), 2500)
+    return () => window.clearTimeout(t)
+  }, [dannifyNote])
   /* stable function aliases — keeps the callbacks below from depending on
      the hook's fresh result object (which would re-create them every render) */
   const {
@@ -230,13 +260,18 @@ export default function Home() {
   )
 
   /* the chips above the tracklist: the whole library first, then every
-     playlist — switching is one click and never opens the drawer */
+     playlist — switching is one click and never opens the drawer. Each chip
+     carries its own count, so the old count bar under them is gone. */
   const chipList = useMemo(
     () => [
-      { id: null as number | null, name: 'ALL' },
-      ...playlists.folders.map((f) => ({ id: f.id as number | null, name: f.name })),
+      { id: null as number | null, name: 'ALL', count: playlist.tracks.length },
+      ...playlists.folders.map((f) => ({
+        id: f.id as number | null,
+        name: f.name,
+        count: f.trackIds.length,
+      })),
     ],
-    [playlists.folders],
+    [playlists.folders, playlist.tracks],
   )
 
   /* deleting the selected playlist drops the selection (falling back to the
@@ -451,6 +486,19 @@ export default function Home() {
     genre: 'STANDBY',
     src: '',
   }
+  /* Accent from Art — the interface wears the playing track's colours. The
+     toggle lives in PLAYER SETTINGS (the drawer); the art is whatever cover
+     the current track carries (null with no art: the deck's own pair eases
+     back). */
+  const [accentArt, setAccentArt] = useState(() => localStorage.getItem('md-accent-art') !== '0')
+  useEffect(() => {
+    try {
+      localStorage.setItem('md-accent-art', accentArt ? '1' : '0')
+    } catch {
+      /* private mode — the choice lasts for this session */
+    }
+  }, [accentArt])
+  useAccentFromArt(track.cover ?? null, accentArt)
   const dragDepth = useRef(0)
   const [dropping, setDropping] = useState(false)
   /* which track the metadata editor is editing (null = closed) + the trigger
@@ -516,6 +564,18 @@ export default function Home() {
      corner of the page */
   const [lyricsSettingsPos, setLyricsSettingsPos] = useState<{ x: number; y: number } | null>(null)
   const [lyricsEditorOpen, setLyricsEditorOpen] = useState(false)
+
+  /* ---- the customize hub + layout editing ----
+     Edit sessions are TRANSIENT: enter from the Customize panel, drag/resize,
+     leave through the floating SAVE LAYOUT button. What persists is the saved
+     rectangle (per panel; the lyrics keep one per CD state), not the edit
+     state itself. */
+  const [customizeOpen, setCustomizeOpen] = useState(false)
+  const [customizeClosing, setCustomizeClosing] = useState(false)
+  const [customizePos, setCustomizePos] = useState<{ x: number; y: number } | null>(null)
+  const [editLyrics, setEditLyrics] = useState(false)
+  const [editTracklist, setEditTracklist] = useState(false)
+  const isEditingLayout = editLyrics || editTracklist
 
   /* hide/show the whole CD assembly (disc + chrome arms + case + sheens) —
      a viewing preference, persisted like the other cd settings */
@@ -630,6 +690,14 @@ export default function Home() {
     if (!radio.current) return
     eng.attachSource(getRadioElement())
   }, [radio.current, eng.attachSource])
+
+  /* The visualiser's ear for the station: a CORS-clean second element (the
+     audible one's capture is cross-origin-tainted silence to the graph —
+     see tuneRadioViz). Tuned to the playing station; a stopped radio takes
+     it back down (stop() clears `current`). */
+  useEffect(() => {
+    eng.tuneRadioViz(radio.current?.url ?? null)
+  }, [radio.current, eng.tuneRadioViz])
 
   /* where the now-playing track sits in the visible list (-1 when the
      selected playlist does not contain it) */
@@ -749,6 +817,123 @@ export default function Home() {
   )
 
   const lyricsApiRef = useRef<import('../components/LyricsPanel').LyricsApi | null>(null)
+
+  /* ---- layout editor wiring ----
+     The lyrics rectangle follows the CD: metallic on and white off get their
+     own saved box (the legacy single-box key migrates into the CD-on slot),
+     because the words read best in different places depending on whether the
+     disc is there to share the stage. The tracklist keeps one box — it exists
+     in both CD states. */
+  const tlLayout = useLayoutBox('md-tracklist-box')
+  /* the setters are stable callbacks; destructured so the handlers below can
+     depend on them (not on the hook's fresh-every-render return object) */
+  const { box: tlBox, setBox: tlSetBox } = tlLayout
+  const { setBoxOn, setBoxOff, setCustom: setLyricsCustom } = lyrics
+  /* the tracklist's natural rectangle, measured the instant edit mode was
+     requested (while the panel is still docked in the deck) — the starting
+     box for a first-ever edit */
+  const [tlSeed, setTlSeed] = useState<LayoutBox | null>(null)
+  const tracklistPanelRef = useRef<HTMLDivElement>(null)
+  const tracklistFramed = editTracklist || !!tlBox
+
+  /* the ONE switch that decides where the lyrics live. The stage overlay and
+     the custom frame are gated on this single value — NOT on their own
+     readings of `custom`/`editLyrics` — so the two render paths are
+     structurally incapable of both being on. (Two live panels is not a
+     hypothetical: with independent conditions, a desync between the custom
+     flag and a lingering edit session rendered the lyrics TWICE — a sharp
+     copy in the overlay and a transformed ghost in the frame.) */
+  const lyricsFramed = lyrics.custom || editLyrics
+
+  const lyricBox = cdVisible ? lyrics.boxOn : lyrics.boxOff
+  const commitLyricBox = useCallback(
+    (b: LayoutBox) => {
+      if (cdVisible) setBoxOn(b)
+      else setBoxOff(b)
+    },
+    [cdVisible, setBoxOn, setBoxOff],
+  )
+
+  /* while an edit session runs the body carries `layout-editing` (index.css):
+     a drag starting over a lyric line or a row is a MOVE, never a selection */
+  useEffect(() => {
+    document.body.classList.toggle('layout-editing', isEditingLayout)
+    return () => {
+      document.body.classList.toggle('layout-editing', false)
+    }
+  }, [isEditingLayout])
+
+  /* ---- viewport remap for the customized panels ----
+     The saved rectangles are viewport pixels; entering or leaving fullscreen
+     resizes the window, and pixels saved for the old size would leave the
+     panels somewhere else. On every viewport change (window resize AND the
+     fullscreenchange event) the three saved boxes are remapped
+     proportionally from the previous viewport to the current one, so each
+     panel keeps its RELATIVE position and covers the same fraction of the
+     screen. Null boxes have nothing to move. */
+  const viewportRef = useRef({ w: window.innerWidth, h: window.innerHeight })
+  useEffect(() => {
+    const remap = () => {
+      const w = window.innerWidth
+      const h = window.innerHeight
+      const prev = viewportRef.current
+      if (prev.w === w && prev.h === h) return
+      viewportRef.current = { w, h }
+      const sx = w / prev.w
+      const sy = h / prev.h
+      const remapBox = (b: LayoutBox) =>
+        clampBox({ x: b.x * sx, y: b.y * sy, w: b.w * sx, h: b.h * sy })
+      if (lyrics.boxOn) setBoxOn(remapBox(lyrics.boxOn))
+      if (lyrics.boxOff) setBoxOff(remapBox(lyrics.boxOff))
+      if (tlBox) tlSetBox(remapBox(tlBox))
+    }
+    window.addEventListener('resize', remap)
+    document.addEventListener('fullscreenchange', remap)
+    return () => {
+      window.removeEventListener('resize', remap)
+      document.removeEventListener('fullscreenchange', remap)
+    }
+  }, [setBoxOn, setBoxOff, tlSetBox, lyrics.boxOn, lyrics.boxOff, tlBox])
+
+  const enterLyricsEdit = useCallback(
+    (on: boolean) => {
+      /* editing implies the custom layout — you cannot arrange the standard
+         positions; saving lands in whichever CD state is live */
+      if (on) setLyricsCustom(true)
+      setEditLyrics(on)
+    },
+    [setLyricsCustom],
+  )
+
+  const enterTracklistEdit = useCallback(
+    (on: boolean) => {
+      if (on && !tlBox) {
+        const r = tracklistPanelRef.current?.getBoundingClientRect()
+        if (r && r.width > 0 && r.height > 0) {
+          const seed = clampBox({ x: r.x, y: r.y, w: r.width, h: r.height })
+          setTlSeed(seed)
+          tlSetBox(seed)
+        }
+      }
+      setEditTracklist(on)
+    },
+    [tlBox, tlSetBox],
+  )
+
+  /* the SAVE LAYOUT button: the rectangle was already committed on the last
+     gesture's pointerup — what this saves is the DECISION to stop editing.
+     The chrome (dashed border + handles) only exists while editing. */
+  const saveLayout = useCallback(() => {
+    setEditLyrics(false)
+    setEditTracklist(false)
+    setTlSeed(null)
+  }, [])
+
+  const resetTracklist = useCallback(() => {
+    tlSetBox(null)
+    setTlSeed(null)
+    setEditTracklist(false)
+  }, [tlSetBox])
   /* a stored TTML string for the current track. When present it is fed to the
      component's `ttml` property, which renders it with NO network request —
      that is what makes a pin permanent and makes hand-edited lyrics stick */
@@ -1270,6 +1455,84 @@ export default function Home() {
     stepVisible,
   ])
 
+  /* the lyrics element, shared by its two homes: the standard overlay (inside
+     the stage box) and the CUSTOM-POSITION frame (a fixed rectangle the user
+     owns). One definition, so the two can never drift out of sync on props. */
+  const lyricsPanel = (
+    <LyricsPanel
+      /* the radio has a position too: the song clock dead-reckons
+         it from the announcement, so the highlight follows the
+         station just as it follows the engine for a library track */
+      title={radio.song ? radio.song.title : track.title}
+      artist={radio.song ? radio.song.artist : track.artist}
+      duration={radio.song ? 0 : eng.duration}
+      live={!!radio.song}
+      playing={radio.song ? radio.playing : eng.playing}
+      getTime={radio.song ? radio.getSongTime : eng.getCurrentTime}
+      onSeek={eng.seekTo}
+      size={lyricMode === 'stage' ? Math.min(56, lyrics.size + 12) : lyrics.size}
+      mode={lyricMode}
+      brightness={lyrics.brightness}
+      offset={radio.song ? radio.lead : lyricOffset}
+      ttml={radio.song ? radio.song.ttml || null : (localLyrics?.ttml ?? null)}
+      /* the metallic face, by strict rule: ONLY a PINNED lyric while the CD
+         is on the stage wears it. CD off forces white no matter what is
+         pinned (the metal must never bleed onto the bare stage), and an
+         unpinned lyric is always plain white even over the disc. The radio's
+         own lyrics never wear metal — they are fetched, not pinned. */
+      metal={cdVisible && !!localLyrics && !radio.song}
+      apiRef={lyricsApiRef}
+    />
+  )
+
+  /* the tracklist element, shared by its two homes: docked in the deck column
+     (the standard layout) and the layout-editor frame (its saved rectangle).
+     One definition, so the two can never drift out of sync on props. */
+  const tracklistPanel = (
+    <PlaylistPanel
+      tracks={visibleTracks}
+      trackIndex={activeVisibleIndex}
+      playing={eng.playing}
+      duration={eng.duration}
+      subscribeTime={eng.subscribeTime}
+      boot={playlist.boot}
+      importing={playlist.importing}
+      importHint={playlist.importHint}
+      query={listQuery}
+      onQueryChange={setListQuery}
+      sort={listSort}
+      onSortChange={setListSort}
+      density={listDensity}
+      onDensityChange={setListDensity}
+      groupBy={groupBy}
+      onGroupByChange={setGroupBy}
+      onSelect={selectVisibleTrack}
+      onRemove={removeVisibleAt}
+      onEditMeta={openVisibleMetaEdit}
+      onReorder={reorderVisible}
+      onExport={playlist.exportM3u}
+      onImport={playlist.openM3uPicker}
+      onAdd={playlist.openAudioPicker}
+      isFavourite={isFavourite}
+      onToggleFavourite={toggleFavourite}
+      isNextUp={isNextUp}
+      onToggleNext={toggleNextVisible}
+      chips={chipList}
+      activeChipId={selectedFolderId}
+      onChipSelect={selectFolder}
+      onNewChip={() => playlists.createFolder()}
+      playlists={playlists.folders}
+      onAddToPlaylist={(folderId, trackId) => playlists.addTrackToFolder(folderId, trackId)}
+      onNewPlaylistWith={(trackId) => {
+        const id = playlists.createFolder(undefined, [trackId])
+        setSelectedFolderId(id)
+      }}
+      onRefreshDownloads={() => void refreshDownloads()}
+      refreshingDownloads={dannifyRefreshing}
+      refreshNote={dannifyNote}
+    />
+  )
+
   return (
     <div
       className={`md-root relative flex flex-col overflow-hidden bg-black text-white ${cursorHidden ? 'cursor-none' : ''}`}
@@ -1379,12 +1642,16 @@ export default function Home() {
       {/* the live backdrop: the VoltViz style picked in the visualiser panel.
           It sits ABOVE every theme paint and above a custom wallpaper — a live
           visual replaces the background rather than hiding behind it — and it
-          takes the wallpaper panel's BLUR and DIM switches along with it. */}
+          takes the wallpaper panel's BLUR and DIM switches along with it.
+          The radio panel's VISUAL switch chooses which analyser it reads —
+          the station's own, or the deck's — but a persisted ON with no
+          station attached falls back to the deck, so the visuals can never
+          be left reading a null analyser (the "everything is black" bug). */}
       <VoltVizBackdrop
         style={volt.style}
         settings={volt.settings}
         onApi={setVizApi}
-        getAnalyser={eng.getAnalyser}
+        getAnalyser={vizAnalyser}
         blur={wall.wallBlur}
         dim={wall.wallDim}
       />
@@ -1674,6 +1941,32 @@ export default function Home() {
         <ListMusic size={15} strokeWidth={2} />
       </button>
 
+      {/* the Customize hub — third button in the corner row, so every
+          "make this screen mine" entry point lives together */}
+      <button
+        onClick={(e) => {
+          if (customizeOpen) {
+            setCustomizeClosing(true)
+            return
+          }
+          const r = e.currentTarget.getBoundingClientRect()
+          setCustomizePos({ x: r.left, y: r.bottom + 8 })
+          setCustomizeOpen(true)
+        }}
+        aria-label="Customize layout"
+        title="Customize layout"
+        className={`absolute right-36 top-14 z-[85] grid h-10 w-10 place-items-center rounded-full text-black transition-transform duration-150 hover:scale-105 active:scale-95 ${
+          customizeOpen ? 'ring-2 ring-emerald-300/70 ring-offset-2 ring-offset-black' : ''
+        }`}
+        style={{
+          background: 'linear-gradient(145deg,#f4f7fa 0%,#c7ccd4 40%,#9aa2ac 70%,#e8ecf1 100%)',
+          boxShadow:
+            'inset 0 1px 1px rgba(255,255,255,0.9), inset 0 -1px 2px rgba(0,0,0,0.25), 0 4px 14px rgba(0,0,0,0.55)',
+        }}
+      >
+        <SlidersHorizontal size={15} strokeWidth={2} />
+      </button>
+
       {/* the Dannify extension — the button sits beside the playlist one, in
           the same corner, so the two ways of finding music are together */}
       <button
@@ -1689,10 +1982,6 @@ export default function Home() {
       >
         <Globe size={15} strokeWidth={2} />
       </button>
-
-      {/* the frame bars: black bars over the wallpaper, under everything
-          else, breathing with the bass (opt-in — see wallpaper settings) */}
-      <FrameBars getAnalyser={eng.getAnalyser} playing={eng.playing} />
 
       {/* safe mode: three launches that never came up have parked the live
           wallpaper (see lib/safeMode) — say so, rather than leaving the
@@ -1794,7 +2083,7 @@ export default function Home() {
               with a clock worth following. So the panel also opens for a
               detected radio song — otherwise a listener with an empty
               library would never see the highlight at all. */}
-          {lyrics.enabled && (allTracks.length > 0 || radio.song) && (
+          {lyrics.enabled && !lyricsFramed && (allTracks.length > 0 || radio.song) && (
             <div
               className={`lyrics-overlay pointer-events-none absolute inset-0 z-[60] flex items-center ${
                 lyricMode === 'disc-right' ? 'justify-end' : 'justify-start'
@@ -1809,24 +2098,7 @@ export default function Home() {
                       : 'h-[72%] w-[78%] pl-[9%] pr-2'
                 }`}
               >
-                <LyricsPanel
-                  /* the radio has a position too: the song clock dead-reckons
-                     it from the announcement, so the highlight follows the
-                     station just as it follows the engine for a library track */
-                  title={radio.song ? radio.song.title : track.title}
-                  artist={radio.song ? radio.song.artist : track.artist}
-                  duration={radio.song ? 0 : eng.duration}
-                  live={!!radio.song}
-                  playing={radio.song ? radio.playing : eng.playing}
-                  getTime={radio.song ? radio.getSongTime : eng.getCurrentTime}
-                  onSeek={eng.seekTo}
-                  size={lyricMode === 'stage' ? Math.min(56, lyrics.size + 12) : lyrics.size}
-                  mode={lyricMode}
-                  brightness={lyrics.brightness}
-                  offset={radio.song ? radio.lead : lyricOffset}
-                  ttml={radio.song ? radio.song.ttml || null : (localLyrics?.ttml ?? null)}
-                  apiRef={lyricsApiRef}
-                />
+                {lyricsPanel}
               </div>
             </div>
           )}
@@ -1929,47 +2201,16 @@ export default function Home() {
 
           {/* playlist — takes whatever height the deck has left, so the
               document stays exactly one screen tall no matter how many
-              tracks are in it */}
-          <PlaylistPanel
-            tracks={visibleTracks}
-            viewName={selectedFolder?.name ?? 'ALL TRACKS'}
-            trackIndex={activeVisibleIndex}
-            playing={eng.playing}
-            duration={eng.duration}
-            subscribeTime={eng.subscribeTime}
-            boot={playlist.boot}
-            importing={playlist.importing}
-            importHint={playlist.importHint}
-            query={listQuery}
-            onQueryChange={setListQuery}
-            sort={listSort}
-            onSortChange={setListSort}
-            density={listDensity}
-            onDensityChange={setListDensity}
-            groupBy={groupBy}
-            onGroupByChange={setGroupBy}
-            onSelect={selectVisibleTrack}
-            onRemove={removeVisibleAt}
-            onEditMeta={openVisibleMetaEdit}
-            onReorder={reorderVisible}
-            onExport={playlist.exportM3u}
-            onImport={playlist.openM3uPicker}
-            onAdd={playlist.openAudioPicker}
-            isFavourite={isFavourite}
-            onToggleFavourite={toggleFavourite}
-            isNextUp={isNextUp}
-            onToggleNext={toggleNextVisible}
-            chips={chipList}
-            activeChipId={selectedFolderId}
-            onChipSelect={selectFolder}
-            onNewChip={() => playlists.createFolder()}
-            playlists={playlists.folders}
-            onAddToPlaylist={(folderId, trackId) => playlists.addTrackToFolder(folderId, trackId)}
-            onNewPlaylistWith={(trackId) => {
-              const id = playlists.createFolder(undefined, [trackId])
-              setSelectedFolderId(id)
-            }}
-          />
+              tracks are in it. While the tracklist owns a saved rectangle
+              (or is being edited) it lives in its LayoutFrame at the top of
+              the tree instead, so this dock only exists while it is docked.
+              The wrapper is what a first-ever edit measures — its rect
+              becomes the starting box. */}
+          {!tracklistFramed && (
+            <div ref={tracklistPanelRef} className="flex min-h-0 flex-1 flex-col">
+              {tracklistPanel}
+            </div>
+          )}
 
           <p className="mt-4 font-mono text-[9px] leading-relaxed tracking-[0.15em] text-white/30">
             CLICK DISC TO PLAY · DRAG DISC TO SCRATCH
@@ -2065,6 +2306,10 @@ export default function Home() {
           discArtNote={discArt.pressNote}
           onDiscArtPick={() => openFilePicker(discArt.inputRef.current)}
           onDiscArtReset={() => void discArt.reset()}
+          collection={discArt.collection}
+          onApplyArt={(id) => void discArt.applyFromCollection(id)}
+          onDeleteArt={(id) => void discArt.removeFromCollection(id)}
+          onClearArt={() => void discArt.clearCollection()}
           cdSpeed={cdSpeed}
           speeds={DISC_SPEEDS}
           onCdSpeed={setCdSpeed}
@@ -2092,7 +2337,10 @@ export default function Home() {
       </div>
       <div className="fixed bottom-[13%] right-[5%] z-[86]">
         {wall.wallBusy != null && (
-          <div className="pop-in fx-blur absolute bottom-[calc(100%+10px)] right-0 flex items-center gap-2 rounded-full border border-white/15 bg-black/75 px-3 py-1.5 backdrop-blur-sm">
+          /* a status pill, not a control: clicks pass through it — the only
+             live part is its own dismiss ✕. It leaves on its own when the
+             conversion ends, no click required. */
+          <div className="pop-in fx-blur pointer-events-none absolute bottom-[calc(100%+10px)] right-0 flex items-center gap-2 rounded-full border border-white/15 bg-black/75 px-3 py-1.5 backdrop-blur-sm">
             <span className="h-1 w-24 overflow-hidden rounded-full bg-white/15">
               <span
                 className="block h-full rounded-full bg-emerald-300 transition-all duration-200"
@@ -2102,7 +2350,10 @@ export default function Home() {
             <span className="font-mono text-[9px] tracking-[0.15em] text-white/60">
               {wall.wallStage ?? 'WALLPAPER'} {Math.round(wall.wallBusy * 100)}%
             </span>
-            <button onClick={wall.cancelConvert} className="font-mono text-[8px] tracking-[0.15em] text-amber-300 hover:text-white">
+            <button
+              onClick={wall.cancelConvert}
+              className="pointer-events-auto font-mono text-[8px] tracking-[0.15em] text-amber-300 hover:text-white"
+            >
               ✕
             </button>
           </div>
@@ -2172,8 +2423,10 @@ export default function Home() {
           onLead={radio.setLead}
           levelOn={radio.levelOn}
           onLevelOn={radio.setLevelOn}
-          vizOn={volt.style !== null}
-          onVizToggle={toggleVolt}
+          vizOn={radioViz}
+          onVizToggle={setRadioViz}
+          lyricsOn={lyrics.enabled}
+          onToggleLyrics={lyrics.toggle}
           stop={radio.stop}
           onClose={() => setRadioOpen(false)}
         />
@@ -2190,6 +2443,45 @@ export default function Home() {
           onHideUi={() => setUiHidden(true)}
           onClose={() => setVisualizerOpen(false)}
         />
+      )}
+
+      {/* the custom lyrics — CUSTOM POSITION replaces the standard overlay
+          above entirely: the panel becomes a fixed viewport rectangle owned
+          by the layout editor. TWO rectangles exist, one per CD state, and
+          this picks the live one (see the wiring block): toggling the CD
+          switches the lyrics to that state's saved spot. Rendered here, at
+          the top of the tree, NOT inside the `data-stage` box: that box
+          carries a translate transform, and a transformed ancestor becomes
+          the containing block for fixed descendants — the saved viewport
+          coordinates would land somewhere else entirely. Independent of
+          cdVisible on purpose: editing works with the CD on or off. */}
+      {lyrics.enabled && lyricsFramed && (allTracks.length > 0 || radio.song) && (
+        <LayoutFrame box={lyricBox} onCommit={commitLyricBox} editing={editLyrics}>
+          {lyricsPanel}
+        </LayoutFrame>
+      )}
+
+      {/* the custom tracklist — the same editor, same chrome, same rules.
+          While a rectangle is saved the panel lives here instead of the deck
+          column; RESET (in the Customize panel) docks it back. */}
+      {tracklistFramed && (
+        <LayoutFrame box={tlLayout.box} onCommit={tlLayout.setBox} editing={editTracklist} seed={tlSeed}>
+          {tracklistPanel}
+        </LayoutFrame>
+      )}
+
+      {/* the editor's finish line — while any edit session runs, this is how
+          the user says "keep it". Every gesture already commits on pointerup;
+          what this saves is the decision to stop, which is what takes the
+          dashed borders and handles down. */}
+      {isEditingLayout && (
+        <button
+          onClick={saveLayout}
+          className="settings-panel fx-blur fixed bottom-24 left-1/2 z-[95] flex -translate-x-1/2 items-center gap-2 rounded-full border border-emerald-300/50 bg-black/85 px-5 py-2 font-mono text-[9px] tracking-[0.25em] text-emerald-200 backdrop-blur-md transition hover:bg-emerald-400/15"
+        >
+          <Check size={12} />
+          SAVE LAYOUT
+        </button>
       )}
 
       {/* lyrics settings — closes itself with the panel it configures */}
@@ -2291,6 +2583,31 @@ export default function Home() {
 
       {creatorOpen && <CreatorMenu closing={creatorClosing} onClosed={onCreatorClosed} />}
 
+      {/* the customize hub — layout editing for every movable panel. Its
+          toggles START edit sessions; the floating SAVE LAYOUT button ends
+          them; the saved rectangles persist. */}
+      {customizeOpen && (
+        <CustomizePanel
+          cdVisible={cdVisible}
+          lyricsCustom={lyrics.custom}
+          onLyricsCustom={lyrics.setCustom}
+          editLyrics={editLyrics}
+          onEditLyrics={enterLyricsEdit}
+          editTracklist={editTracklist}
+          onEditTracklist={enterTracklistEdit}
+          tracklistSaved={!!tlLayout.box}
+          onResetTracklist={resetTracklist}
+          lyricsEnabled={lyrics.enabled}
+          onClose={() => setCustomizeClosing(true)}
+          closing={customizeClosing}
+          pos={customizePos}
+          onClosed={() => {
+            setCustomizeOpen(false)
+            setCustomizeClosing(false)
+          }}
+        />
+      )}
+
       {/* the online extension — the real Dannify, in its own window. It has
           its own player and its own library, and nothing in it touches this
           player's playlist. */}
@@ -2313,6 +2630,14 @@ export default function Home() {
         library={playlist.tracks}
         currentIndex={eng.trackIndex}
         playing={eng.playing}
+        playerSettings={{ crossfade: eng.crossfade, crossfadeSec: eng.crossfadeSec, normalize: eng.normalize }}
+        onPlayerSetting={(key, value) => {
+          if (key === 'crossfade') eng.setCrossfade(!!value)
+          else if (key === 'crossfadeSec') eng.setCrossfadeSec(Number(value))
+          else eng.setNormalize(!!value)
+        }}
+        accentArt={accentArt}
+        onAccentArt={setAccentArt}
         onClose={() => setPlaylistOpen(false)}
         selectedFolderId={selectedFolderId}
         onSelectFolder={selectFolder}

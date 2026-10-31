@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { X, ArrowLeftRight } from 'lucide-react'
+import { X, ArrowLeftRight, BookmarkPlus, Check, Pencil } from 'lucide-react'
 import {
   hexToHsv,
   hsvToCss,
@@ -14,6 +14,43 @@ interface Props {
   paint: Paint
   onChange: (next: Paint) => void
   onClose: () => void
+}
+
+/* ---- saved gradient presets ----
+   Named snapshots of the whole gradient (both stops + the angle), kept in
+   localStorage beside the player's other display choices. Applying one
+   replaces the current gradient wholesale; renaming is inline. */
+interface GradientPreset {
+  id: string
+  name: string
+  gradient: { from: Hsv; to: Hsv; angle: number }
+}
+
+const PRESETS_KEY = 'md-wall-gradient-presets'
+
+function readPresets(): GradientPreset[] {
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(PRESETS_KEY) ?? '[]')
+    if (!Array.isArray(raw)) return []
+    return raw.filter(
+      (p): p is GradientPreset =>
+        !!p &&
+        typeof p === 'object' &&
+        typeof (p as GradientPreset).id === 'string' &&
+        typeof (p as GradientPreset).name === 'string' &&
+        !!(p as GradientPreset).gradient,
+    )
+  } catch {
+    return []
+  }
+}
+
+function writePresets(list: GradientPreset[]): void {
+  try {
+    localStorage.setItem(PRESETS_KEY, JSON.stringify(list))
+  } catch {
+    /* private mode — the list lasts for this session */
+  }
 }
 
 /* which end of the gradient the colour axes are editing */
@@ -85,6 +122,43 @@ export default function ColorPicker({ paint, onChange, onClose }: Props) {
     },
     [grad, solid, onChange],
   )
+
+  /* ---- the saved presets ---- */
+  const [presets, setPresets] = useState<GradientPreset[]>(readPresets)
+  const [naming, setNaming] = useState(false)
+  const [nameDraft, setNameDraft] = useState('')
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [renameDraft, setRenameDraft] = useState('')
+
+  const savePreset = () => {
+    if (!grad) return
+    const name = nameDraft.trim() || `GRADIENT ${presets.length + 1}`
+    const preset: GradientPreset = {
+      id:
+        typeof crypto !== 'undefined' && 'randomUUID' in crypto
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.floor(Math.random() * 1e9)}`,
+      name,
+      gradient: { ...grad },
+    }
+    const next = [preset, ...presets].slice(0, 40)
+    setPresets(next)
+    writePresets(next)
+    setNaming(false)
+    setNameDraft('')
+  }
+  const commitRename = (id: string) => {
+    const name = renameDraft.trim()
+    if (name) {
+      const next = presets.map((p) => (p.id === id ? { ...p, name } : p))
+      setPresets(next)
+      writePresets(next)
+    }
+    setRenamingId(null)
+  }
+  const applyPreset = (p: GradientPreset) => {
+    onChange({ kind: 'gradient', gradient: { ...p.gradient } })
+  }
 
   /* the two stops trade places — the angle stays, so the picture is mirrored
      along the same axis instead of turning into a different one */
@@ -159,7 +233,7 @@ export default function ColorPicker({ paint, onChange, onClose }: Props) {
 
   return (
     <div
-      className="pop-in w-[264px] rounded-2xl border border-white/12 bg-[#0c0c11]/95 p-3 shadow-[0_24px_60px_rgba(0,0,0,0.75)] backdrop-blur-md"
+      className="pop-in max-h-[calc(100vh-24px)] w-[264px] overflow-y-auto overscroll-contain rounded-2xl border border-white/12 bg-[#0c0c11]/95 p-3 shadow-[0_24px_60px_rgba(0,0,0,0.75)] backdrop-blur-md"
       role="dialog"
       aria-label="Wallpaper colour"
     >
@@ -255,6 +329,114 @@ export default function ColorPicker({ paint, onChange, onClose }: Props) {
             aria-label="Gradient angle"
             className="chrome-range mb-2.5 w-full"
           />
+
+          {/* save the gradient as it stands, under a name of the user's own */}
+          <div className="mb-2.5">
+            {naming ? (
+              <div className="flex items-center gap-1.5">
+                <input
+                  autoFocus
+                  value={nameDraft}
+                  onChange={(e) => setNameDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      savePreset()
+                    }
+                    if (e.key === 'Escape') {
+                      e.stopPropagation()
+                      setNaming(false)
+                      setNameDraft('')
+                    }
+                  }}
+                  placeholder="NAME THIS GRADIENT"
+                  spellCheck={false}
+                  aria-label="Gradient preset name"
+                  className="min-w-0 flex-1 rounded-lg border border-white/15 bg-white/5 px-2 py-1 font-mono text-[9px] tracking-[0.1em] text-white outline-none transition focus:border-white/40"
+                />
+                <button
+                  onClick={savePreset}
+                  aria-label="Save gradient preset"
+                  className="grid h-6 w-6 shrink-0 place-items-center rounded-lg border border-emerald-300/40 bg-emerald-400/10 text-emerald-200 transition hover:border-emerald-300/70"
+                >
+                  <Check size={11} />
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => {
+                  setNaming(true)
+                  setNameDraft('')
+                }}
+                className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-white/5 py-1 font-mono text-[8px] tracking-[0.18em] text-white/50 transition hover:bg-white/10 hover:text-white"
+              >
+                <BookmarkPlus size={10} />
+                SAVE PRESET
+              </button>
+            )}
+          </div>
+
+          {presets.length > 0 && (
+            <div className="mb-2.5 max-h-28 overflow-y-auto rounded-lg border border-white/10 pr-0.5">
+              {presets.map((p) => (
+                <div key={p.id} className="flex items-center gap-2 px-1.5 py-1 transition hover:bg-white/5">
+                  <span
+                    aria-hidden
+                    className="h-3.5 w-3.5 shrink-0 rounded-full border border-white/25"
+                    style={{ background: gradientCss(p.gradient) }}
+                  />
+                  {renamingId === p.id ? (
+                    <>
+                      <input
+                        autoFocus
+                        value={renameDraft}
+                        onChange={(e) => setRenameDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault()
+                            commitRename(p.id)
+                          }
+                          if (e.key === 'Escape') setRenamingId(null)
+                        }}
+                        onBlur={() => commitRename(p.id)}
+                        spellCheck={false}
+                        aria-label="Rename gradient preset"
+                        className="min-w-0 flex-1 rounded border border-white/25 bg-white/5 px-1.5 py-0.5 font-mono text-[9px] tracking-[0.1em] text-white outline-none focus:border-white/50"
+                      />
+                      <button
+                        onClick={() => commitRename(p.id)}
+                        aria-label="Confirm rename"
+                        className="grid h-5 w-5 shrink-0 place-items-center rounded text-emerald-300 transition hover:bg-white/10"
+                      >
+                        <Check size={10} />
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => applyPreset(p)}
+                        title={`Wear “${p.name}”`}
+                        className="min-w-0 flex-1 truncate text-left font-mono text-[9px] tracking-[0.12em] text-white/70 transition hover:text-white"
+                      >
+                        {p.name}
+                      </button>
+                      <button
+                        onClick={() => {
+                          setRenamingId(p.id)
+                          setRenameDraft(p.name)
+                        }}
+                        aria-label={`Rename ${p.name}`}
+                        title="Rename"
+                        className="grid h-5 w-5 shrink-0 place-items-center rounded text-white/40 transition hover:bg-white/10 hover:text-white"
+                      >
+                        <Pencil size={9} />
+                      </button>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </>
       )}
 
