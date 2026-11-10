@@ -21,7 +21,7 @@ aim project/
 │   │   │   │   ├── layout/               ← the layout editor's saved rectangles
 │   │   │   │   ├── playlist/             ← library, ordering, system playlists
 │   │   │   │   ├── radio/                ← stations, song clock, level monitor
-│   │   │   │   ├── voltviz/              ← backdrop visualizers (BarGraph, Butterchurn, …)
+│   │   │   │   ├── voltviz/              ← backdrop visualizers (BarGraph, Butterchurn, Sonic Topography, …)
 │   │   │   │   └── dannify/              ← extension bridge sync (downloads/likes)
 │   │   │   └── lib/                      ← IndexedDB library, accent, icy, theme, …
 │   │   ├── src-tauri/          ← Rust shell: sources registry, MilkDrop engine, dannify bridge
@@ -52,7 +52,11 @@ aim project/
   lyrics/visual toggles.
 - **Visualizers** — VoltViz backdrop styles (BarGraph, Butterchurn with
   `.milk` preset import, and more) with per-style persisted settings, plus
-  a MilkDrop engine in the Rust shell.
+  a MilkDrop engine in the Rust shell. Also two GPL-3.0 ports of the
+  Sonic Topography wallpapers — **Sonic Topography** (© CmzYa) and
+  **Sonic Topography X** (© Netesfiu) — audio-reactive 3D pillar terrain fed
+  from the deck's analyser, the extended one stereo-aware, each with its own
+  theme/toggle settings card (see `app/src/features/voltviz/README.md`).
 - **Online side** — the Dannify extension in its own window; finished
   downloads sync into the reserved **Downloads Online** system playlist
   (instant via WebSocket, or one click on REFRESH).

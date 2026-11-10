@@ -6,7 +6,11 @@ interface VisualizerEntry {
 
 // Single source of truth for all visualizers: the id union, the module map and
 // the picker labels/order are all derived from this list (newest first).
+// The two Sonic Topography entries are GPL-3.0 ports (CmzYa / Netesfiu) —
+// see sonic/LICENSE — the rest are VoltViz's MIT styles.
 export const visualizers = [
+  { id: 'sonictopographyextended', name: 'Sonic Topography X', module: 'SonicTopographyExtended' },
+  { id: 'sonictopography', name: 'Sonic Topography', module: 'SonicTopography' },
   { id: 'butterchurn', name: 'Butterchurn', module: 'Butterchurn' },
   { id: 'bargraph', name: 'Bar Graph', module: 'BarGraph' },
   { id: 'kaleidoscope', name: 'Kaleidoscope', module: 'Kaleidoscope' },

@@ -35,3 +35,22 @@ licence text is `LICENSE` beside this file.
 tracker). `VoltVizBackdrop.tsx` mounts the chosen style behind the player;
 `useVoltViz.ts` remembers the choice. The picker lives in the visualiser panel,
 beside MilkDrop's settings.
+
+## Sonic Topography (GPL-3.0, not VoltViz)
+
+Two further styles are ports of the Sonic Topography wallpapers — **NOT**
+VoltViz code and **NOT** MIT:
+
+| Here | There |
+|---|---|
+| `impl/SonicTopography.ts` | https://github.com/CmzYa/sonic-topography — `MapScene.tsx` + `CustomShaderMaterial.ts`, © CmzYa |
+| `impl/SonicTopographyExtended.ts` | https://github.com/Netesfiu/sonic-topography-extended — the enhanced fork, © Netesfiu |
+| `sonic/` | the two repos' `src/lib/AudioEngine.ts` and `src/lib/themes.ts`, ported; `sonic/LICENSE` is the GPL-3.0 text |
+
+What changed against upstream: React Three Fiber scenes are rebuilt in plain
+three.js inside the factory/frame contract (same shaders, uniform sets, pools
+and camera math); Wallpaper Engine's audio listener is replaced — the original
+reads a 64-bin 0–22 kHz frame resampled from the deck's analyser, the extended
+feeds its stereo engine a real 128-value frame from two channel analysers —
+and Wallpaper Engine-only chrome (player controller, album art, property
+panel, click meteors) is not ported. Each file's header spells this out.

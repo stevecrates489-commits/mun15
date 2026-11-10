@@ -49,7 +49,24 @@ const REMOVE_AFTER_MS = FADE_MS + 60
    Balls") paints soft lit spheres that likewise need a black stage, and the
    two full-screen ones (Bar Graph, Butterchurn) paint every pixel themselves. */
 const blackFor = (style: string) =>
-  style === 'flame' || style === 'mossball' || style === 'bargraph' || style === 'butterchurn'
+  style === 'flame' || style === 'mossball' || style === 'bargraph' || style === 'butterchurn' ||
+  /* the two Sonic Topography ports paint their own sky (clear colour + fog) */
+  style === 'sonictopography' || style === 'sonictopographyextended'
+
+/* Most styles are WebGL. When WebGL itself is unavailable (a WebView with
+   graphics acceleration off), every one of them fails at mount — Bar Graph
+   is the only 2D canvas, so it is the only one that survives. Say that plainly
+   instead of claiming the visual "would not start". */
+function failedStartMessage() {
+  try {
+    const probe = document.createElement('canvas')
+    const gl = probe.getContext('webgl2') ?? probe.getContext('webgl')
+    if (gl) return 'THIS VISUAL COULD NOT START — SEE THE CONSOLE'
+  } catch {
+    /* fall through to the WebGL explanation */
+  }
+  return 'WEBGL IS OFF IN THIS WINDOW — ENABLE GRAPHICS ACCELERATION, OR USE BAR GRAPH'
+}
 
 /** Retire layers whose successor is in place (or that nothing is coming for). */
 function settle(layers: HTMLElement[], fadeOut: boolean) {
@@ -149,7 +166,7 @@ function VoltVizBackdrop({ style, settings, getAnalyser, onApi, blur = false, di
            leave a blank one either: the layer says what happened and stops. */
         console.error(`[voltviz] ${style} stopped`, err)
         cancelAnimationFrame(raf)
-        container.textContent = "THIS VISUAL NEEDS A GPU FEATURE THIS MACHINE DOES NOT HAVE"
+        container.textContent = failedStartMessage()
         container.style.cssText =
           'position:absolute;inset:0;display:grid;place-items:center;padding:24px;text-align:center;font-family:ui-monospace,monospace;font-size:10px;letter-spacing:.2em;color:rgba(255,255,255,.3)'
         if (blackFor(style)) container.style.background = '#000'
@@ -196,9 +213,9 @@ function VoltVizBackdrop({ style, settings, getAnalyser, onApi, blur = false, di
       })
       .catch((err: unknown) => {
         console.error(`[voltviz] ${style} would not start`, err)
-        container.textContent = 'THIS VISUAL WOULD NOT START'
+        container.textContent = failedStartMessage()
         container.style.cssText =
-          'position:absolute;inset:0;display:grid;place-items:center;font-family:ui-monospace,monospace;font-size:10px;letter-spacing:.2em;color:rgba(255,255,255,.3)'
+          'position:absolute;inset:0;display:grid;place-items:center;padding:24px;text-align:center;font-family:ui-monospace,monospace;font-size:10px;letter-spacing:.2em;color:rgba(255,255,255,.3)'
         if (blackFor(style)) container.style.background = '#000'
         arrive()
       })

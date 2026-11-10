@@ -1,524 +1,549 @@
-# AGENT HANDOFF — MUN15H project
+# AGENT HANDOFF — MUN15H
 
-Read this before doing anything in this repo. It is the working context of the
-agent session(s) that built the current state of the player — the environment
-quirks, the verification workflow, what was changed and why, and what is still
-open. Keep it updated after significant work.
+Read this before touching anything. It is the current working map of the repo:
+what the project is, how to run and verify it, where the systems live, what the
+last big round changed, and what is still open. If this file and the code
+disagree, the code wins — then fix this file.
+
+Last rewritten: 2026-11-11, after the UI/UX overhaul round, the bug-fix pass,
+the Cylinder Carousel integration, and the Sonic Topography visualizer ports.
+
+---
+
+## 0. GOLDEN RULES
+
+- **Repo root is `aim project`.** The player lives in
+  `3D Music Player with CD Animation/app/`. Run front-end commands there.
+- **The shell is Git Bash** (not PowerShell). POSIX syntax, `head`/`tail`/`grep`/`rm`
+  all work. An older version of this file wrongly claimed PowerShell; ignore it.
+- **There is ONE layout edit mode** (`editChrome` / `isEditingLayout` in Home).
+  It makes every button, header control and popover draggable, and gives the
+  five stage panels drag + resize handles. `SAVE LAYOUT` is the only way out.
+- **The queue/playlists panel replaced the tracklist + drawer.** The old
+  `PlaylistPanel` is still mounted but hidden as a rollback path; the old
+  `PlaylistDrawer` file remains but is no longer imported. Do not delete
+  either without the user asking.
+- **Never route the audio element through WebAudio.** The engine captures a
+  stream from it; see `useAudioEngine.ts` before changing anything audio.
+- **Everything since `HEAD` is uncommitted** and the working tree is huge.
+  Commit only when the user asks, in themed batches.
+- **The user verifies visually on their own machine.** Their screenshot/repro
+  beats any theory. Keep layout, tokens and behaviour intact unless asked.
+- **Run the gates after changes**: `tsc`, targeted `eslint`, `npm run test:unit`,
+  and (for UI work) the relevant Playwright harness.
 
 ---
 
 ## 1. WHAT THIS PROJECT IS
 
-**MUN15H MiniDisc Player** — a desktop music player: Tauri 2 + React 19 +
-TypeScript + Vite 7 + Tailwind 3 (shadcn/Radix) front end, a Rust shell, and a
-vendored Python app ("Dannify") serving as the online side in an iframe.
+**MUN15H MiniDisc Player** — a desktop music player styled as a luxury MiniDisc
+deck. Tauri 2 shell + React 19 + TypeScript + Vite 7 + Tailwind 3, with a
+vendored Python app (`dannify/`) serving the online side in its own window.
 
 ```
-C:\Users\aryan\Documents\aim project\
-├── AGENTS.md                  ← graft context-graph instructions (read it)
-├── AGENT-HANDOFF.md           ← this file
-├── graft/                     ← generated repo context graph (gitignored, regenerable: graft build)
-├── 3D Music Player with CD Animation\
-│   ├── app\                   ← the player (npm/Vite/Tauri)
-│   │   ├── src\
-│   │   │   ├── pages\Home.tsx          ← orchestrator (~2300 lines, everything hangs off it)
-│   │   │   ├── components\             ← PlaylistPanel, PlaylistDrawer, LyricsPanel,
-│   │   │   │                              DiscCase (3D CD), Transport, RadioPanel,
-│   │   │   │                              CdSettingsPanel, VisualizerPanel,
-│   │   │   │                              WallpaperSettingsPanel, ColorPicker, ui\
-│   │   │   ├── hooks\useAudioEngine.ts ← THE audio engine (element lifecycle,
-│   │   │   │                              crossfade, standby preload, normalization,
-│   │   │   │                              media session, capture-graph)
-│   │   │   ├── features\
-│   │   │   │   ├── voltviz\            ← backdrop visualizers (impl\*, audio.ts, VoltVizBackdrop)
-│   │   │   │   ├── dannify\            ← extension bridge sync (downloads.ts, useDannifySync.ts)
-│   │   │   │   ├── radio\, lyrics\, playlist\, disc\, wallpaper\, sources\, visualizer\
-│   │   │   ├── lib\                    ← library.ts (IndexedDB), accent.ts, icy.ts, color.ts …
-│   │   │   └── types\                  ← module shims (milkdrop-preset-converter.d.ts)
-│   │   ├── src-tauri\                  ← Rust: sources/ (multi-provider registry), visualizer/ (MilkDrop engine), dannify.rs
-│   │   ├── tests\                      ← plain-node unit tests (paint, theme, songclock, visualizer)
-│   │   └── docs\                       ← four excellent architecture docs (INTEGRATION_CONTRACT etc.)
-│   ├── dannify\                        ← vendored Dannify v4.14.1 (Python) + 5 player-owned bridge files
-│   │   └── player_bridge.py            ← the player's routes/wrapper AROUND Dannify (owned, editable)
-│   └── .verify\                        ← UI verification harnesses (playwright-core, msedge channel)
-└── .git\                               ← real repo (branch main, commit 0b67541 = initial import)
+aim project/                          ← git root, branch main
+├── AGENT-HANDOFF.md                  ← this file
+├── README.md                         ← feature map (partly stale: tracklist → queue panel)
+├── .agents/skills/                   ← design skills (unslop, liquid-glass, glisse, lenis, …)
+├── graft/                            ← regenerable repo graph (gitignored; `graft build`)
+├── .verify/                          ← root-level provider/chain probes (chainprobe, providerprobe, …)
+└── 3D Music Player with CD Animation/
+    ├── app/                          ← the player (npm/Vite/Tauri)
+    │   ├── src/
+    │   │   ├── main.tsx, App.tsx
+    │   │   ├── pages/Home.tsx        ← THE orchestrator (~3150 lines; everything hangs off it)
+    │   │   ├── hooks/useAudioEngine.ts ← audio engine (element lifecycle, standby, crossfade, AGC)
+    │   │   ├── components/           ← QueuePanel, MusicControlPanel, PlayerSettingsPanel,
+    │   │   │                            LayoutFrame, DraggableSurface, CustomizePanel, LyricsPanel,
+    │   │   │                            DiscCase, ChromeVisualizer, CylinderCarousel, panels, ui/
+    │   │   ├── features/
+    │   │   │   ├── layout/           ← useLayoutBox, LayoutFrame helpers, chrome drag/offset store
+    │   │   │   ├── lyrics/           ← provider chain, registry, order, install, ProviderList
+    │   │   │   ├── playlist/         ← usePlaylist (library), usePlaylists (folders/system lists)
+    │   │   │   ├── radio/            ← useRadio, songClock, radioLyrics
+    │   │   │   ├── visualizer/       ← native MilkDrop engine bridge (useVisualizer, frames, pcm)
+    │   │   │   ├── voltviz/          ← JS backdrop visualizers (BarGraph, Butterchurn, …)
+    │   │   │   ├── dannify/          ← ONLINE extension bridge + downloads sync
+    │   │   │   ├── disc/, wallpaper/, sources/
+    │   │   ├── lib/                  ← library.ts (IndexedDB), keepAlive, radioTap, liquidGlass,
+    │   │   │                            accent, color, icy, bootGate, safeMode, ttml, …
+    │   │   └── types/
+    │   ├── src-tauri/                ← Rust shell: sources registry, MilkDrop engine, dannify, lyrics HTTP
+    │   ├── tests/                    ← plain-node unit tests (5 files)
+    │   ├── docs/                     ← INTEGRATION_CONTRACT, ONLINE_SOURCES, ONLINE_SECTION,
+    │   │                                YOUTUBE_PIPELINE, EXTENSION_SPEC (new, untracked)
+    │   ├── .verify/                  ← extra scratch harnesses/shots (mostly untracked)
+    │   └── nextprev-*.png, queuefix-*.png ← scratch screenshots, candidates for cleanup
+    ├── dannify/                      ← vendored Dannify (Python) + player_bridge.py
+    └── .verify/                      ← Playwright harness inventory (some new ones untracked)
 ```
 
-Git: the repo is `aim project` itself (NOT the home directory). Everything
-since `0b67541` is **uncommitted working tree** — large batches of work sit
-uncommitted; commit deliberately when the user asks.
+**Docs worth reading before deep work:** `app/docs/EXTENSION_SPEC.md` (extension
+contract), `app/docs/INTEGRATION_CONTRACT.md` (Dannify seam),
+`app/docs/ONLINE_SOURCES.md` and `ONLINE_SECTION.md` (online providers),
+`app/docs/YOUTUBE_PIPELINE.md`. The root `README.md` feature map still describes
+the old tracklist; the queue panel is the current truth.
 
-Docs worth reading before deep work: `app/docs/INTEGRATION_CONTRACT.md`
-(Dannify seams), `app/docs/ONLINE_SOURCES.md` (provider registry rules),
-`app/docs/ONLINE_SECTION.md`, `app/docs/YOUTUBE_PIPELINE.md`.
-
----
-
-## 2. ENVIRONMENT QUIRKS (critical — this machine's shell is broken)
-
-The session shell is **Git Bash with a Windows-style PATH** — plain `ls`, `git`,
-`npm`, `cat`, `head`, `wc`, `sleep` are ALL missing (`command not found`).
-Workarounds that work:
-
-- **git**:  `"/c/Program Files/Git/cmd/git.exe" -C "C:/Users/aryan/Documents/aim project" <cmd>`
-- **npm/npx**: `cd` into `app/` first, then `"/c/Program Files/nodejs/npm.cmd" …`
-  or `"/c/Program Files/nodejs/npx.cmd" tsc -b --pretty false`
-- **node**: `"/c/Program Files/nodejs/node.exe"`
-- **PowerShell**: `"/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe" -NoProfile -File <script.ps1>`
-- **curl**: `/c/Windows/System32/curl.exe`
-- **ripgrep**: `/c/Users/aryan/AppData/Local/Programs/ZCode/resources/tools/ripgrep/rg.exe`
-- **no coreutils at all** — no `sleep` (use `node -e "setTimeout(...)"`),
-  no `head/tail/wc` (pipe through rg, or use PowerShell script files).
-
-**PowerShell `$` interpolation trap**: inline `powershell -Command "...$_..."` —
-bash eats `$var`. NEVER inline non-trivial PowerShell. Write a `.ps1` script
-file (temp dir is fine) and run it with `-ExecutionPolicy Bypass -File`.
-
-**rg regex traps**: no `(a|b)` alternation errors come from unescaped `^` or
-`{`; prefer multiple simple rg calls over one clever one.
-
-**Dev servers for verification**: start with
-`"/c/Program Files/nodejs/npx.cmd" vite --port 5210 --strictPort` (background
-task), wait ~15-40s (cold dep-optimize), probe with curl. Stale instances
-happen — a listener may hold `::1` only (curl `127.0.0.1` fails, `localhost`
-gives 404 = something stale). Check listeners with PowerShell
-`Get-NetTCPConnection -LocalPort <p>` and `Stop-Process -Id <pid>`. ALWAYS stop
-your server before finishing (`Stop-Process` by port owner).
-
-**The `graft` CLI** is not reachable in this shell (Windows npm global, broken
-PATH). The `graft/` graph files can be read/grepped directly, or use
-`cmd.exe /c "graft …"` if needed.
-
-**Windows `>nul` redirect in Git Bash creates a literal file named `nul`** —
-use `>/dev/null`, and delete any stray `nul` file that appears at repo root.
+**Git:** branch `main`, HEAD `6eeeee2` (“pause-resume keep-alive, pointer-drag
+reorder, 11-item UI/logic batch”). Every current change is uncommitted. The
+`.gitignore` covers `node_modules/`, `dist/`, `src-tauri/target/`, `.venv/`,
+`dannify/data/`, `dannify/bin/`, `graft/`, `.verify` images and `shots/`.
 
 ---
 
-## 3. VERIFICATION WORKFLOW (how every change is proven)
+## 2. ENVIRONMENT AND COMMANDS
 
-1. **Type-check**: `npx tsc -b --pretty false` in `app/` (must be empty + exit 0).
-2. **Lint**: `npx eslint <only the files you touched>`. Do NOT run bare
-   `eslint .` as a gate — the repo has pre-existing lint errors (baseline in
-   `app/.lint-baseline.log`): empty `catch {}` blocks in `lib/library.ts`,
-   `setScrolled(false)` inside LyricsPanel's build effect, `setOwnCard` in
-   VisualizerPanel's effect, Transport's empty catch, two exhaustive-deps
-   warnings in Home.tsx (lines ~627, ~876). Leave them; flag if yours differ.
-3. **Unit tests**: `node tests/paint.test.mts`, `theme`, `songclock`,
-   `visualizer` (run all four; 124 tests).
-4. **Python**: after touching `dannify/player_bridge.py`:
-   `./dannify/.venv/Scripts/python.exe -m py_compile dannify/player_bridge.py`
-5. **Live UI harnesses** (`.verify/*.mjs`, run with `"/c/Program Files/nodejs/node.exe" <name>.mjs`):
-   - All use `playwright-core` + `chromium.launch({ channel: 'msedge', headless: true })`
-     (the machine has no bundled browsers; msedge works).
-   - **Tauri shim is REQUIRED** — the shell calls `getCurrentWindow()` during
-     render and dies in a plain browser. Inject before load:
-     ```js
-     await page.addInitScript(() => {
-       window.__TAURI_INTERNALS__ = {
-         metadata: { currentWindow: { label: 'main' }, currentWebview: { label: 'main' } },
-         transformCallback: (cb) => cb,
-         invoke: () => Promise.resolve(null),
-         plugins: {}, resources: {},
-       }
-     })
-     ```
-   - `waitUntil: 'networkidle'` hangs on a cold Vite (HMR websocket +
-     re-optimizing deps) — use `{ waitUntil: 'domcontentloaded' }` + 4s wait.
-   - `.mjs` harness files are PLAIN JS: no TS `as`/type annotations anywhere,
-     including inside `page.evaluate` callbacks.
-   - In-page module tests: `await import('/src/features/...')` inside
-     `page.evaluate` works (Vite serves transformed TS) — importing a `.tsx`
-     with JSX from a BLANK page fails (React preamble); do it from the app
-     page itself.
-   - React state + assertions race: after dispatching events that setState,
-     `await` two rAFs before reading the DOM.
-   - Long-running harnesses: log results incrementally and use
-     `.catch()` + `force: true` on flaky clicks so partial results survive.
+The session shell is **Git Bash**. Tools default to a cwd outside the project,
+so always `cd` explicitly.
 
-Harness inventory (`.verify/`): `appcheck.mjs` (BarGraph pixel suite: Full
-White rendering, palette round-trip, left-edge stability, bar independence),
-`uicheck.mjs` (frame-bars-gone, visualizer panel anchor, radio panel + exit
-animation; radio opens via 450ms HOLD of `button[aria-label="Radio (hold)"]`),
-`cdcheck.mjs` (CD collection flyout, hidden cover options, gradient preset
-save/rename), `vizcheck.mjs` (BarGraph bg-toggle pixel modes, Butterchurn
-mount), `drawercheck.mjs` (player settings in drawer), `headercheck.mjs`
-(header redesign: chip counts, TRACKLIST bar gone, footer row, scroll-to-blur
-header-only), `milkcheck.mjs` (milkdrop-preset-converter output shape),
-`playcheck.mjs` (keep-alive: element looping through pauses, first-play /
-short-resume / 65s-resume latencies), `dragcheck.mjs` (pointer drag: ghost
-lifts + follows, origin parked, marker, order commits, click still plays,
-cleanup), `uibatch.mjs` (the 11-item batch: cursor, backdrop canvas across
-track changes, radio toggle, header z, HUE gone, hints gone, stepper
-alignment, next/prev stepping), `final5.mjs` (rendered-white lyric with CD
-off, dark select CSS, star template ships). HARNESS TRAP (found the hard way): the boot intro `#boot` overlay
-(z-index 99999, a canvas) still holds the window under the Tauri shim — its
-auto-exit gate can leave it up, and the first real pointerdown is EATEN by
-it (synthetic dispatches on the row bypass it and look fine). Dismiss it
-first: click once (e.g. 20,880) and poll until `#boot` is gone/display:none.
+```bash
+# repo root
+cd "/c/Users/aryan/Documents/aim project"
+
+# the player
+cd "3D Music Player with CD Animation/app"
+
+node_modules/.bin/tsc -b --pretty false          # type-check (must exit 0)
+node_modules/.bin/eslint <touched files>         # lint only what you changed
+npm run test:unit                                # 5 plain-node test files
+node_modules/.bin/vite build                     # production build
+npx vite --port 5210 --strictPort                # dev server for harnesses
+```
+
+- Node is v26; `.mts` tests run type-stripped directly.
+- `npm run build` = `tsc -b && vite build`.
+- Rust (only when touching `src-tauri/`):
+  ```bash
+  cd "3D Music Player with CD Animation/app/src-tauri"
+  cargo check
+  cargo test --lib the_shell_can_reach_every_provider -- --ignored   # live lyric endpoints
+  ```
+- Python (only after `dannify/player_bridge.py`):
+  `./dannify/.venv/Scripts/python.exe -m py_compile dannify/player_bridge.py`
+- `graft` is a Windows npm global on PATH; run it from the repo root
+  (`graft map`, `graft ask "…" --source`). Rebuild with `graft build` after big
+  changes.
+
+### Playwright harness recipe
+
+Harnesses live in `3D Music Player with CD Animation/.verify/*.mjs` and use
+`playwright-core` with `chromium.launch({ channel: 'msedge', headless: true })`
+(no bundled browsers on this machine). The Tauri shim is required before load:
+
+```js
+await page.addInitScript(() => {
+  window.__TAURI_INTERNALS__ = {
+    metadata: { currentWindow: { label: 'main' }, currentWebview: { label: 'main' } },
+    transformCallback: (cb) => cb,
+    invoke: () => Promise.resolve(null),
+    plugins: {}, resources: {},
+  }
+})
+```
+
+Traps proven the hard way:
+
+- `waitUntil: 'networkidle'` hangs on a cold Vite (HMR socket). Use
+  `{ waitUntil: 'commit' }` or `'domcontentloaded'` plus a wait.
+- **The boot intro `#boot` (z-index 99999) can stay up under the shim** and it
+  swallows the first real pointer event. Do not rely on clicking it away —
+  after load, `await page.evaluate(() => document.querySelector('#boot')?.remove())`
+  (or poll for `#boot.gone`). Synthetic dispatches bypass it and give false confidence.
+- `.mjs` files are plain JS: no TS casts/annotations, including inside
+  `page.evaluate` callbacks.
+- Import a TS module inside `page.evaluate` with `await import('/src/...')`
+  (Vite serves transformed TS) — but JSX/`.tsx` only from the app page, not a
+  blank one. `.verify/mount.tsx` exists for that; `vite.config.ts` sets
+  `server.fs.allow: ['..']`.
+- Import test audio by generating small WAV Buffers and `setInputFiles` on the
+  hidden `input[type=file][accept*=".mp3"]` in Home.
+- Headless audio stays STANDBY (no real `audio.src`); you can test selection,
+  state and UI, not audible playback.
+- Log results incrementally and end with `process.exit(0)` — `browser.close()`
+  can hang.
+- Always stop a dev server you started (`netstat`/`Get-NetTCPConnection`, then
+  kill by PID).
 
 ---
 
-## 4. ARCHITECTURE NOTES (the non-obvious parts)
+## 3. VERIFICATION (current baseline)
 
-**Audio engine** (`useAudioEngine.ts`) — read its comments; they are load-bearing:
-- ONE media element per "deck", captured via `captureStream()` into the
-  analysis graph (element is NEVER routed through WebAudio — that rule makes
-  silence structurally impossible). Never add a DynamicsCompressorNode on the
-  element path.
+Last verified after the carousel work:
+
+| Gate | Command | Result |
+| --- | --- | --- |
+| Types | `node_modules/.bin/tsc -b --pretty false` | exit 0 |
+| Lint | `eslint` on changed files | 0 errors (Home has 4 pre-existing exhaustive-deps warnings) |
+| Unit | `npm run test:unit` | **188 passed, 0 failed** (paint 42, theme 10, songclock 34, visualizer 38, lyrics 64) |
+| Build | `vite build` | exit 0 (large-chunk warning only) |
+
+Unit tests are plain node scripts, no runner. `lyrics.test.mts` has a live
+section gated behind `LYRICS_LIVE=1`.
+
+**Harness inventory (current unless noted):**
+`appcheck` (BarGraph pixels), `vizcheck` (BarGraph modes, Butterchurn mount),
+`uicheck` (visualizer/radio panel anchors), `cdcheck` (CD collection, gradient
+presets), `headercheck`, `milkcheck` (.milk conversion), `playcheck`
+(keep-alive latencies), `dragcheck` (pointer drag reorder), `scrollcheck`
+(scroll monotonicity), `uibatch`, `final5`, `lyrcheck`/`lyrfix`,
+`lyricscheck` (live provider chain), `lyricreadycheck` (green provider dot),
+`queuefix` (the queue-panel contract), `chromecheck` (chrome drag/offset
+editor), `soniccheck` (the two Sonic Topography ports: mount, first frame,
+settings card, attribution, persistence, clean dispose), `nextprev`
+(Next/Prev + queue ordering). Stale/legacy:
+`drawercheck.mjs`, `playersettings-check.mjs`, `uiter.mjs` (early UI-period
+shots). Root `.verify/` holds provider probes (`chainprobe`, `providerprobe`,
+`unisonprobe`, …) and `.verify/provider-tests/` has one openable page per
+provider. `app/.verify/` holds ad-hoc scratch scripts/shots.
+
+---
+
+## 4. ARCHITECTURE MAP
+
+### 4.1 Audio engine — `src/hooks/useAudioEngine.ts`
+
+Read the comments; they are load-bearing. Core rules:
+
+- ONE media element per deck, captured via `captureStream()` into the analysis
+  graph. The element is never routed through WebAudio. Never add a compressor
+  on the element path.
 - **Standby preload**: a second parked element holds the peeked-next track
-  (`xfArmedRef`), so track switches are element swaps, not decodes. On
-  natural end / NEXT (auto or playing): `promoteStandby()` swaps roles.
-  Manual prev / arbitrary select still decode on demand. NEXT-while-paused
-  loads without autoplay (semantics preserved).
-- **Crossfade** (`beginXfade`): overlap on the second element; `takeoverFrom`
-  is the shared handover (listeners via `attachElementListeners`, capture
-  re-established via `watchDeckRef`, generation counter `xfGenRef` aborts
-  stale ramps). Any user pick/skip/pause aborts mid-ramp.
-- **Volume normalization**: slow AGC in the 100ms tick — RMS from the deck
-  analyser, divided by element volume, eases `normGainRef` (0.35–2.4),
-  applied as `el.volume = userVol * normGain`. Reset per track. Skipped
-  during crossfade ramps.
-- **Radio** plays on its own session element (`getRadioElement`), captured
-  into the deck gain via `attachSource`. A dedicated radio-only analyser
-  (`getRadioAnalyser`) exists for the visualizer source switch.
-- **VISUALIZER SOURCE**: `Home.tsx` `vizAnalyser` callback —
-  `radioViz ? (getRadioAnalyser() ?? getAnalyser()) : getAnalyser()`.
-  The `?? getAnalyser()` fallback is LOAD-BEARING: `md-radio-viz` persists in
-  localStorage, and without the fallback a persisted ON with no station
-  leaves every voltviz visual reading null → silence → "black screens".
-  This exact bug was fixed once; do not regress it.
+  (`xfArmedRef`); natural end / NEXT promotes it (`promoteStandby`) instead of
+  decoding. Armed records carry `shuffled` and are validated against the live
+  mode/list.
+- **Crossfade** (`beginXfade` / `takeoverFrom`): overlaps two elements; a
+  generation counter aborts stale ramps. User pick/skip/pause aborts mid-ramp.
+- **Volume normalization**: slow AGC in the 100 ms tick, RMS from the deck
+  analyser, applied as `el.volume = userVol * normGain`. Skipped during ramps.
+- **Radio**: own session element + `getRadioAnalyser()`. `tuneRadioViz(url)`
+  keeps a private CORS-enabled, zero-gain element feeding the analyser; a
+  CORS-refusing station nulls it and the deck fallback engages.
+- **Keep-alive** (`lib/keepAlive.ts`): one second of true digital silence loops
+  through the endpoint while paused so Windows never powers the output down
+  (fixes 5–6 s resume delay). Never captured, no metadata.
+- Public surface includes `playing`, `duration`, `shuffle`, `repeat`, `volume`,
+  `busy`, `failed`, `select`, `playNext/playPrev`, `setVolume`, `seekTo`,
+  `subscribeTime`, `getAnalyser`, `getRadioAnalyser`, `tuneRadioViz`, `prewarm`.
 
-**VoltViz backdrop** (`features/voltviz/`): `VoltVizBackdrop` mounts factory
-modules into a black container (`blackFor` list) with crossfade; modules read
-`audio.spectrum()` from the shared frame source. `BarGraph` has known-tricky
-bits: `alpha: true` canvas + optional `clearRect` (SHOW BACKGROUND toggle,
-`md-bargraph-bg`), colour cache is a single `painted` string that MUST be
-re-synced at the background fill (per-bar caching caused the Full White
-vanish), low-end tilt `lowGain` is eased (raw = left-edge pumping), bars use
-band mapping + interpolation (nearest-bin made left bars move in pairs).
+### 4.2 Library / playlists — `features/playlist/`
 
-**Dannify bridge**: `player_bridge.py` adds `/api/player/*` routes in front of
-Dannify's own app; nothing of Dannify's is edited. The bridge joins the vault's
-full `artists` list (multi-artist fix); LyricsPanel fetches lyrics with the
-full artist string first, then rebuilds once against the primary artist
-(`artistFallback`) before the empty state.
+- `usePlaylist` owns the track list + ordering; `usePlaylists` owns folders and
+  system playlists (`DOWNLOADS_FOLDER_ID`, `FAVOURITES_FOLDER_ID`).
+- Persistence: IndexedDB `md-walkman`, stores `tracks`, `meta`, `lyrics`
+  (`src/lib/library.ts`). Downloads Online is auto-created and non-deletable.
+- Playback context: `playFromQueuePanel(trackId, folderId?)` in Home — a folder
+  row makes that folder the playing context; a library row selects in place.
 
-**UI conventions**: house style = comments written as prose explaining WHY,
-mono uppercase micro-labels, `chrome-range` sliders, glass panels
-(`settings-panel fx-blur rounded-2xl border-white/15 bg-black/NN backdrop-blur`),
-FloatingMenu-style portaled popovers, `previous-key` render-phase state resets
-(NOT setState-in-effect — the eslint react-hooks rules are strict here; new
-code must avoid setState sync in effect bodies).
+### 4.3 Layout system — `features/layout/` + `components/LayoutFrame.tsx`
 
----
+Two different units, deliberately:
 
-## 5. WHAT WAS DONE (sessions up to this handoff — newest last)
+- **Stage panels use rectangles** (`LayoutBox {x,y,w,h}`, pixels) through
+  `useLayoutBox(key)`; rendered by `LayoutFrame` (fixed, dashed border + 8
+  resize dots only while editing, 4 px drag threshold, commits on pointerup,
+  seeds from a measured docked position on first edit, `clampBox` on display).
+  Current rectangle keys: `md-lyrics-box-on` (legacy `md-lyrics-box` migrates
+  into it), `md-lyrics-box-off`, `md-queue-box`, `md-music-box`, `md-disc-box`,
+  `md-cylinder-box`. Home remaps every box proportionally on window resize and
+  `fullscreenchange`.
+- **Everything else (corner buttons, header controls, popovers, footer) uses
+  offsets** through `DraggableSurface` + `useChromeDrag`, stored as one record
+  under `md-chrome-offsets`. Offsets apply via CSS `translate` (never clobber
+  `transform`), are unbounded, and scale with viewport changes. `RESET SCREEN`
+  clears them.
+- One `editChrome` state gates both. Entering it seeds the five panels from
+  their docked positions and turns on `lyrics.custom`; `SAVE LAYOUT` ends it.
+  `body.layout-editing` disables text selection.
+- `components/CustomizePanel.tsx` is the hub: CUSTOM POSITION, per-panel
+  RESETs, EDIT LAYOUT + RESET SCREEN.
+- The settings popovers (CD, wallpaper, visualizer, radio, lyrics settings,
+  player settings, customize, extension, track meta, lyrics editor) carry
+  `.panel-resizable` (`index.css`): native CSS `resize: both`, min 210×150,
+  max viewport − 16 px, restyled grip. Sizes are session/CSS-only; only
+  positions persist.
 
-1. **git repo created** for `aim project` (was untracked inside the home dir);
-   `.gitignore` covers target/node_modules/.venv/ffmpeg/graft/.verify images.
-2. **BarGraph fixes**: Full White invisibility (context-fillStyle cache),
-   left-edge flicker (eased low-end tilt + full clear), paired left bars
-   (band interpolation), overlay alignment.
-3. **Radio VISUAL decoupled** from global visualizer state; radio-only
-   analyser added (`getRadioAnalyser`); persisted as `md-radio-viz`.
-4. **Tracklist perf**: scroll handler rAF-coalesced; stable row handlers
-   (inline `onContextMenu` defeated memo).
-5. **Visualizer panel anchored** top-left under the header circle (top 4.5rem).
-6. **Butterchurn**: favorites (md-bc-favs), hide-from-rotation (md-bc-hidden),
-   persisted Auto-Cycle/Random-Next (md-bc-cycle / md-bc-random).
-7. **FrameBars removed** completely (component, lib, CSS, toggle).
-8. **Radio**: favorite-from-search pushes Known instantly; buffering spinner;
-   280ms close animation (`panel-out-soft`); station names keep real metadata
-   on re-play (no URL-as-name); ICY placeholder titles ("No title" etc.) filtered.
-9. **Header redesign**: chips with counts, TRACKLIST bar removed, footer
-   count/duration row, scroll-to-blur header-only. (CURRENT WORKING TREE.)
-10. **Player settings** (crossfade 0/3/5/8s + normalize) live in the
-    **playlists drawer** (PlaylistDrawer.tsx), NOT the main tracklist panel.
-11. **Accent from Art**: hand-rolled dominant-color extraction
-    (`lib/accent.ts` + `lib/useAccent.ts`) → CSS vars
-    `--accent-a/b/glow/row` animated 800ms; toggle in Wallpaper Settings
-    (`md-accent-art`); consumers: seekbar, active row, progress lines.
-12. **Media Session**: seekto/seekbackward/seekforward added (metadata +
-    play/pause/prev/next already existed).
-13. **CD settings**: TRACK/PLAYLIST COVER options hidden (`<div hidden>`, code
-    kept); **CD Collection** flyout (portal, hover-open, IndexedDB-backed
-    `discArtCol:*` records, CLEAR ALL two-step confirm, multi-select delete,
-    click-to-wear).
-14. **Gradient presets**: save/name/rename list in ColorPicker
-    (`md-wall-gradient-presets`).
-15. **Lyrics**: strict-white default vs metallic-on-CD (`md` metal sheets in
-    LyricsPanel, tied to `cdVisible` via `metal` prop); cute empty state
-    (`.no-lyrics` hidden; placeholder after ~11s poll, "JUST VIBING 🎵").
-16. **CD rotation decoupled from seeking** (scratch no longer flings the disc;
-    0.0x = still).
-17. **.milk import** in Butterchurn: `milkdrop-preset-converter@0.1.2` (npm),
-    lazy chunk, UMD resolved via default→namespace→`window.milkdropPresetConverter`,
-    customs persisted in IndexedDB `bcCustom:*`, ◆ marker, per-custom delete,
-    verified PASS against a synthetic MD2 preset (`milkcheck.mjs`).
-18. **This handoff file.**
-19. **Lyrics custom position** (first pass): `md-lyrics-custom` toggle +
-    `md-lyrics-box`, `LyricsCustomFrame` (since replaced — see 20),
-    verified by `lyrcheck.mjs`.
-20. **Customize / layout editor system** (current working tree):
-    - `features/layout/useLayoutBox.ts` — `LayoutBox {x,y,w,h}`, `clampBox`
-      (viewport clamp, MIN 160×120), `useLayoutBox(key, legacyKey?)` with
-      legacy migration.
-    - `components/LayoutFrame.tsx` (replaced LyricsCustomFrame) — shared
-      drag/resize frame for lyrics AND tracklist; chrome (dashed border +
-      8 handles) only while `editing`; drag threshold 4px keeps clicks
-      working; commits on pointerup; seeds on mount when box is null.
-    - **Two lyrics boxes**: `md-lyrics-box-on` / `md-lyrics-box-off` per CD
-      state (`md-lyrics-box` migrates into the CD-on slot); Home picks by
-      `cdVisible` (`lyricBox`/`commitLyricBox`).
-    - Tracklist: `md-tracklist-box`; when saved/editing the PlaylistPanel
-      renders inside a LayoutFrame at the top of Home (extracted as
-      `tracklistPanel` const; dock slot in the deck column is what a
-      first edit measures via `tracklistPanelRef`). RESET in the
-      Customize panel clears the box.
-    - Edit sessions are transient state in Home (`editLyrics`,
-      `editTracklist`); the floating **SAVE LAYOUT** pill (bottom center)
-      ends them; body gets `layout-editing` class → `user-select: none`
-      (index.css) so drags never select text; handles also preventDefault.
-    - `components/CustomizePanel.tsx` + a third corner button
-      (`aria-label="Customize layout"`, right-36 top-14): holds the moved
-      CUSTOM POSITION toggle, EDIT LYRICS LAYOUT, EDIT TRACKLIST LAYOUT,
-      tracklist RESET. Lyrics Settings no longer has the toggle.
-    - Verified by `lyrcheck.mjs` (full pass): edit chrome lifecycle, no text
-      selection, CD-split switching, persistence, tracklist move/resize/
-      reload/reset, customize panel contents.
-21. **Tracklist scroll de-bounce** — `overflow-anchor: none` on
-    `.playlist-scroll` (scroll anchoring fought the windowing); the
-    active-row `centerOn` effect now runs ONLY when `activeTrackId` really
-    changes (a `rowH` re-measure or length change rebuilt `centerOn` and
-    re-ran the effect mid-scroll — the "yank backward"); window overscan
-    pad 8→12. Verified by `scrollcheck.mjs` (fling monotonicity).
-22. **Downloads Online = system playlist** — auto-created on load
-    (`ensureDownloads` in usePlaylists), `deleteFolder` refuses `-2`,
-    DELETE hidden in both drawer spots (⋯ menu + open-folder trash).
-23. **Downloads refresh** — REFRESH button in the panel toolbar, only while
-    the Downloads Online view is active (`onRefreshDownloads` prop →
-    `dannifySync.sync()`), spins while in flight. The instant path
-    (`onDannifyDownloadsDone` WS) already existed; see §6 caveat.
-24. **Radio visualiser fix** — ROOT CAUSE: the audible radio element is
-    cross-origin without CORS → its capture is SILENCE to the Web Audio
-    graph (documented in lib/radioLevel; attachSource routed that tainted
-    capture into the analysers). Fix: `tuneRadioViz(url)` in the engine
-    keeps a private second element (`crossOrigin='anonymous'`, muted via a
-    zero gain) feeding `radioAnalyserRef`; Home tunes it to
-    `radio.current.url`; a CORS-refusing station nulls the analyser so the
-    deck fallback engages. Verified by reasoning + type-check only —
-    a REAL station listen is still owed (headless cannot prove audio).
-25. **UI/persistence/logic batch** (verified by `uifix.mjs`, full pass):
-    - Tracklist header frost: the wheel-blur tint `rgba(8,10,16,…)` →
-      constant `rgba(255,255,255,0.05)`; blur 0 paints nothing.
-    - BarGraph settings persist: `md-bargraph-{palette,bars,intensity}`
-      (factory owns state, Overlay seeds from the same keys). **Trap fixed
-      during verify: `Number(null)` is 0 — readNum must return the fallback
-      for a missing key or every unset setting clamps to its floor.**
-      Settings card rows now share one grid (labels + controls aligned).
-    - RadioPanel LYRICS toggle (next to VISUAL) → `lyrics.toggle`.
-    - Dannify sync passes are now SERIALIZED on a promise chain
-      (useDannifySync) — the old busy-guard swallowed clicks mid-pass and
-      could double-import. REFRESH shows CHECKING…/spinner immediately and
-      a `+N ADDED`/`UP TO DATE` note when its pass lands (the pass can take
-      ~25s while the extension's likes list times out — that is the
-      extension's latency, not the button's).
-    - Lyrics empty state is a phase machine (searching → found/none) and
-      `hasLyrics` now excludes `.lyrics-footer` — the component's footer
-      ("Source Unavailable · am-lyrics v1.8.2") masqueraded as a
-      `.lyrics-line` with text, so a failed search read as "found" and the
-      cute placeholder could NEVER appear. A "SEARCHING FOR LYRICS…" pill
-      shows during the fetch window (not for pinned/TTML).
-26. **Lyrics texture rules + wallpaper flyout** (verified by `lyrfix.mjs`):
-    - LyricsPanel takes a `metal` prop; a METAL_CHROME adopted sheet (chrome
-      gradient via background-clip + silver/bright palette) replaces
-      WHITE_CHROME when on. Home owns the rule:
-      `metal={cdVisible && !!localLyrics && !radio.song}` — CD off and
-      unpinned both force white; only pinned+disc wears metal. NOTE: the
-      metal face arrives one beat after mount (localLyrics loads async from
-      IDB) — a harness must poll until lines render before reading sheets.
-    - The cute placeholder is permanent once shown (the phase machine holds
-      'none'; the old 2–3s disappearance was the footer-as-lyrics bug).
-    - WallpaperSettingsPanel: the saved-wallpapers LIST is replaced by a
-      YOUR WALLPAPERS hover row → portal flyout opening to the LEFT
-      (panel sits on the right edge), with CLEAR ALL (two-step) and per-item
-      X deletes. The panel itself is capped (max-h + scroll) so the X stays
-      in view; ADD WALLPAPER stays in the panel.
-27. **Double lyrics panel fix** — user reported a second lyric layer when
-    pinning. Extensive repro (pin/unpin/custom/edit/CD matrix, playing and
-    non-playing tracks, shadow-tree dumps) could NOT duplicate the DOM —
-    hosts stay at exactly 1. The one structural way two panels could render
-    was the stage overlay and the custom frame gating on INDEPENDENT flags
-    (`!lyrics.custom` vs `lyrics.custom || editLyrics`) — any desync between
-    the custom flag and a lingering edit session rendered both. Now a single
-    `lyricsFramed = lyrics.custom || editLyrics` gates BOTH branches, so
-    double-rendering is structurally impossible. Verified: 8-state matrix
-    (dupcheck7.mjs) — exactly one host everywhere. IF THE USER STILL SEES
-    the double layer, suspect a stale bundle in their running instance —
-    hard-reload / restart the dev server before digging further.
-28. **ROOT CAUSE FOUND — the ghost lyric layer = BACKGROUND VOCALS.** The
-    am-lyrics component renders `ttm:role="x-bg"` echo lines (lrc.red
-    includes them for many tracks) in `.background-vocal-container`s with
-    `height: 0; overflow: visible` — the 0.7em copy paints DIRECTLY over
-    the neighbouring line's glyphs, entering from above or below
-    (`background-before`/`-after`), character-interleaving with the real
-    text. The component ALWAYS renders these containers, and the layer is
-    DATA-dependent (why clean-profile repros stayed clean). Fix:
-    `BG_HIDE_CHROME` in LyricsPanel — `.background-vocal-container {
-    display: none !important; }` in the adopted sheet (both faces).
-    Verified (dupcheck11 flow, seeded x-bg TTML): bg containers exist in
-    DOM but paint nothing; main text renders once. NOTE: providers are
-    FLAKY in headless (fetches often return nothing) — seed lyrics into
-    IDB (`lyrics` store, key = String(track.id)) to test deterministically,
-    and inject the mp3 via fetch('/src/assets/track1.mp3') — huge
-    evaluate-arg arrays silently break the seed.
-29. **PINNED-ONLY overlap root cause: the METAL sheet's background-clip.**
-    The user's pinned+CD-on screenshots showed the lyric text painted twice
-    (dim ghost at the pre-transform position). The ONLY CSS that differs
-    pinned vs unpinned is the METAL_CHROME sheet, whose `background-clip:
-    text` + `-webkit-text-fill-color: transparent` gradient on
-    `.lyrics-line`/`.lyrics-line-container` desyncs in WebView2 from the
-    line's transformed children (headless Chromium does not show it — why
-    repros kept failing). Fix: METAL_CHROME rewritten WITHOUT
-    background-clip — chrome palette vars (silver unsung / nickel sung via
-    the component's own wipe) + an embossed shadow pair (light edge above,
-    dark bevel below). Verified: metal palette applied, zero
-    background-clip in our adopted sheets, bg vocals still hidden, main
-    text single. ALSO fixed along the way: lyric ghost layers from x-bg
-    background vocals (item 28) and overlay/frame exclusivity (item 27).
-    LESSON: never paint text via background-clip:text in this app's
-    WebView2 — use palette vars + shadows.
-30. **Layout/styling batch** (verified by `uifix2.mjs`, all pass):
-    - Custom boxes remap PROPORTIONALLY on viewport change: Home listens to
-      window resize + document fullscreenchange and rescales the three saved
-      boxes (lyrics CD-on/CD-off + tracklist) from the previous viewport to
-      the current one, clamped — fullscreen toggles keep the panels at their
-      relative spot. Boxes stay pixel-based in storage; the remap rewrites
-      them (verified 1440→1800→1440 round-trip).
-    - BarGraph settings grid widened to `grid-cols-[92px_1fr]` so SHOW
-      BACKGROUND fits one line; labels share one x, stepper clusters share
-      one x (verified).
-    - Tracklist scroll frost moved from the header div to the PANEL ROOT:
-      the wheel over the header tunes one level and the whole glass panel
-      (header + list) goes to `blur(L)` + `rgba(255,255,255,0.05)`; level 0
-      paints nothing (default `bg-black/45` glass). The header's own style
-      block is gone.
-31. **Pause-resume delay fixed — the keep-alive** (verified by `playcheck.mjs`):
-    User report: after ~1 minute paused, PLAY took 5-6s to sound, every
-    track, every time. Cause: the Windows audio endpoint powers down when
-    nothing renders; waking it costs seconds on this driver stack. Fix:
-    `lib/keepAlive.ts` — a looping element of one second of TRUE zero
-    samples (hand-wrapped WAV, no asset), volume 0.01, started from the
-    engine's watchdog effect (mount + every interaction retry, autoplay
-    policy covered). Browser equivalent of foobar2000's silence-writing
-    output: the endpoint never idles, so resume is instant. Plain element —
-    never captured, no graph involvement, no media-session metadata.
-    Harness numbers: first play 125ms, short resume 136ms, 65s-pause
-    resume 220ms; keep-alive keeps rendering through every pause. The real
-    endpoint proof is the user's machine (headless cannot reproduce the
-    power-down itself). `keepAliveElement()` exported for the harness.
-32. **Drag-reorder rewritten — pointer drag, no HTML5 DnD** (verified by
-    `dragcheck.mjs` + `scrollcheck.mjs`): native HTML5 DnD stutters in
-    WebView2 by construction (out-of-process ghost lags the cursor;
-    dragenter throttled). PlaylistPanel now owns the drag: delegated
-    `pointerdown` on the scroll box (rows carry `data-row-index`), 5px
-    threshold keeps clicks clicks, then pointer capture + a rAF loop that
-    writes ONE translate3d per frame to a portalled ghost
-    (`.playlist-row-ghost`, fixed, pointer-events none, starts opacity 0
-    until placed) while the origin row parks as the placeholder
-    (`.playlist-row-drag-origin`). Landing marker + playlist chips
-    (`data-chip-id`) hit-tested with elementFromPoint per frame; edge
-    auto-scroll eased on the same rAF (speeds preserved ±11 × 0.25); drop
-    commits via the same `onReorder(from, to)`; the click a drag ends on
-    is suppressed (box capture listener, 250ms); body gets `row-dragging`
-    (user-select none). The scroll window extends to cover the dragged
-    slot so the row never unmounts mid-flight. TRAPS: the row entrance
-    animation (`playlist-row-in`, fill both) overrides inline transforms —
-    `animateIn` excludes `draggedIdx`; chips lost their native DnD
-    handlers (rows no longer native-drag; chip drops ride our own state).
-    Behavior, layout and tokens unchanged; only MANUAL sort + no grouping
-    reorders, as before.
-33. **11-item UI/logic batch** (verified by `uibatch.mjs` + `final5.mjs`):
-    - IDLE CURSOR HIDING removed (Home effect + `.cursor-none` CSS gone; the
-      H-key `hide-ui` cursor rule is a separate explicit feature, kept).
-    - **Capture stream is RE-TAKEN on every play** (`watchDeck`): a stream
-      captured from a media element is bound to the source it had when
-      taken — after `src` changes the old tracks stop delivering and every
-      reading is zeros ("bar graph reacts to some tracks only"). Each
-      `playing`/`loadedmetadata` drops the previous MediaStreamSource and
-      takes a fresh one (`deckSrcRef`). `watchingRef` is gone. The element
-      is STILL never captured for real — the crossfade ramps el.volume on
-      two native elements, which direct MediaElementSource capture would
-      destroy (per-element gains would be a full volume-architecture
-      rewrite; do not "fix" this back without reading the crossfade first).
-      Verified e2e: backdrop canvas paints on track 1 AND track 2.
-    - Radio: tap gets a ctx.resume() + ONE retry per URL on error
-      (`radioTapRetriedRef`; `tuneRadioVizRef` because the callback cannot
-      close over itself). The VISUAL toggle was already source-only
-      (verified: flips `md-radio-viz`, backdrop stays). CORS-refusing
-      stations are UNREADABLE by browser rule — the deck fallback freezing
-      during radio is expected, not a bug.
-    - Header raised z-40 → **z-[65]** (above the lyrics overlay's z-60): the
-      header is ONE stacking context, so the colour picker's internal
-      z-[95] was capped at 40 and lost to the lyrics.
-    - WHITE_CHROME carries a hard force block: color/fill white, no
-      background-clip, no text-shadow, no text-stroke (verified on a
-      RENDERED pinned lyric with CD off: computed white/none/0px/none).
-    - NEXT/PREV "random pick" root cause: the STANDBY (`xfArmedRef`)
-      survived shuffle flips and list edits, and promoteStandby fired the
-      stale pick. Armed records now carry `shuffled`; promote validates
-      mode + ordered-index; the tracks-sync effect and a `[shuffle,repeat]`
-      effect drop stale arms. Verified e2e incl. wrap-around.
-    - HUE slider removed from TUNING (setting stays in the type).
-    - CLICK DISC hint `<p>` removed (Home ~2215).
-    - BarGraph card: strict `grid-cols-[1fr_auto]` + fixed `w-[104px]
-      grid-cols-[24px_48px_24px]` stepper clusters (steppers align to 0px).
-    - Native select popups painted dark (index.css: color-scheme dark +
-      option bg #14161c; checked #2b3340) — the WebView2 popup was white-
-      on-white; Butterchurn options carry ⭐ for favourites.
-    - HARNESS TRAPS: `#boot.ready` is transparent + pointer-events:none but
-      display stays block — dismissing by display:none never fires, just
-      click once and move on. Adopted sheets throw on cssText/cssRules in
-      this WebView — judge styles by getComputedStyle of rendered nodes.
-      Butterchurn's factory never completes headless (no WebGL → canvas
-      stuck 300x150, api never set, Overlay card absent) — its card needs
-      source-level or rendered-style checks, not the live card.
+### 4.4 Queue + playlists hub — `components/QueuePanel.tsx` (+ `.css`)
+
+The single surface replacing the tracklist and the drawer (the old
+`PlaylistPanel` remains mounted hidden as rollback; `PlaylistDrawer` is no
+longer imported). Features:
+
+- Two tabs (`q` queue / `p` playlists) with an animated thumb; search overlays
+  the toolbar; playlists are list rows with open/rename/delete/upload.
+- Queue = current track pinned first, then play-next, then context rotated at
+  the playhead so the row under the current one IS what Next plays.
+- Rows: art play button, pencil editor (title/artist/cover + lyrics editor),
+  add-to-queue/playlist menu (`+`), X to remove. A queued row removes from the
+  play-next list; a context row is hidden locally via the `skipped` set (never
+  deletes from the playlist). The current row has no X.
+- Pointer drag reorder with grip, ghost/lift, edge auto-scroll; queued rows
+  reorder `nextUp`, context rows reorder the playing folder.
+- Glass settings pop (`md-qp-glass`: transparency/blur/refraction/radius) driven
+  by `liquid-gl` with a CSS fallback; global Blurred/Solid (`md-glass`) drops or
+  rebuilds the lens.
+- Pin + auto-hide from the dock edge (`md-qp-side`/`md-qp-width` are legacy
+  reads; sizing now belongs to the layout editor).
+- Downloads Online refresh button (serialized sync passes, deadline-guarded).
+- Hosted in a `LayoutFrame` when `queueFramed` (edit mode or saved box).
+
+### 4.5 Lyrics — `components/LyricsPanel.tsx` + `features/lyrics/`
+
+- `@uimaxbai/am-lyrics` renders word-synced TTML. `installProviderChain.ts`
+  replaces its fetch so the app owns the whole chain; its own parser/renderer
+  and footer state stay authoritative.
+- `registry.ts`: **11 providers, all reachable** — Tier 1 `unison`,
+  `betterlyrics`, `betterlyrics-qq`, `netease`, `paxsenix-word`, `kugou`,
+  `lyricsplus`; Tier 2 `lrclib`, `paxsenix-line`, `lrc-red`; Tier 3
+  `lyrics-ovh`. Dead routes (QQ hosts, Genius, AZLyrics, Musixmatch web,
+  YouTube captions) were probed and removed; do not re-add without a fresh probe.
+- `order.ts` keeps the user's order under `md-lyrics-provider-order` and repairs
+  it when the registry changes. `ProviderList.tsx` is a pointer-drag reorder
+  list with tier badges; clicking a provider forces it for the current track.
+- Transport: `features/lyrics/http.ts` uses the shell command
+  `lyrics_http_get(url, referer, timeout_ms)` (Rust, `src-tauri/src/lyrics.rs`)
+  when in Tauri; browser fallback is direct fetch + a small CORS-proxy pool with
+  per-host circuit breaker. Providers run in parallel; the user's order decides
+  the winner; chain deadline 8 s, per-provider budget 6 s.
+- Faces: `WHITE_CHROME` (default, hard white), `METAL_CHROME` (pinned lyric +
+  CD on only; palette + emboss, **never** `background-clip: text` — it desynced
+  in WebView2). `BG_HIDE_CHROME` hides background-vocal echo containers (the
+  old “ghost lyric layer”). The component header/footer are hidden; a small
+  provider badge + green dot is the only chrome.
+- Pinning stores TTML in IndexedDB (`lyrics` store) per track; the editor and
+  per-track offset live in `md-*` metadata. Empty state is a phase machine
+  (`searching → none`) with a multi-artist fallback.
+- Position: standard on/beside-disc (rendered INSIDE `discAssembly`, so moving
+  the disc carries the lyrics) or a custom `LayoutFrame` rectangle saved per CD
+  state. Home picks `metal={cdVisible && !!localLyrics && !radio.song}`.
+
+### 4.6 Visualizers
+
+- Native MilkDrop engine: Rust `src-tauri/src/visualizer/*`; front-end bridge
+  `features/visualizer/useVisualizer.ts` (presets, textures, mode, PCM).
+- JS backdrop styles: `features/voltviz/` (`VoltVizBackdrop` mounts modules into
+  a black container with crossfade; `BarGraph`, Butterchurn, …). `BarGraph` has
+  tricky pixel-cache rules — read the file before touching it.
+- **Sonic Topography ports (GPL-3.0 — different licence from VoltViz's MIT)**:
+  `impl/SonicTopography.tsx` (© CmzYa) and `impl/SonicTopographyExtended.tsx`
+  (© Netesfiu) are the two Wallpaper Engine wallpapers rebuilt as plain
+  three.js scenes in the factory/frame contract; upstream's `AudioEngine.ts`
+  lives in `sonic/` with Wallpaper Engine's listener replaced — the original
+  reads a 64-bin 0–22 kHz frame resampled by frequency from the deck analyser,
+  the extended feeds a real stereo 128-value frame from two channel analysers.
+  Each carries its own settings card (`Overlay`: theme select, ripples/meteors/
+  idle-wave/spin/peak toggles, intensities) persisted under
+  `md-voltviz-sonic-topography(-extended)`; the shared SENSITIVITY/SPEED/SCALE
+  sliders map to tap gain, shader-time rate and camera zoom. Full provenance
+  and licence notes in `features/voltviz/README.md`; GPL text at
+  `features/voltviz/sonic/LICENSE`.
+- `components/ChromeVisualizer.tsx` draws the reactive ring around the disc.
+- `VisualizerPanel.tsx` is the settings surface; `VoltVizBackdrop` shows a
+  WebGL-explanation message when a style cannot start.
+
+### 4.7 Radio
+
+`features/radio/useRadio.ts` (radio-browser.info stations, ICY metadata, song
+clock, stream-end detection), `lib/icy.ts`, `lib/radioLevel.ts`,
+`lib/radioBrowser.ts`, `lib/radioTap.ts` + Rust `radio_tap` (shell fetches a
+CORS-less stream and re-serves it on the loopback server with `*`, so the
+analyser can read it). Radio holds its own session element and visual source
+(`md-radio-viz`); the `?? getAnalyser()` fallback in Home’s `vizAnalyser` is
+load-bearing — keep it.
+
+### 4.8 ONLINE / Dannify
+
+Vendored Python app in `dannify/`, opened by the extension hub in its own
+window (`features/dannify/DannifyWindow.tsx`); bridge routes live in
+`player_bridge.py`. `useDannifySync` imports finished downloads into the
+Downloads Online system playlist (WebSocket instant path + serialized manual
+REFRESH with timeouts).
+
+### 4.9 Cylinder Carousel — `components/CylinderCarousel.tsx` (+ `.css`)
+
+Ported from a standalone HTML demo, stripped of its fake audio/data and wired
+into the app:
+
+- Props: `tracks` (Home passes `carouselTracks` = a stable slice of
+  `visibleTracks`), `currentId`, `playing`, `subscribeTime`, `duration`,
+  `getAnalyser`, `editing`, `focusedIndex` + `onFocusChange`, `onPlay`,
+  `onToggle`.
+- Clicking a card calls the same global path as queue rows
+  (`playFromQueuePanel`), or toggles when it is the current track. The ring
+  auto-centres on the engine’s current track and reports focus up to Home.
+- One RAF loop drives the ring; drag (6 px threshold), wheel and
+  ArrowLeft/ArrowRight move it. Pointer capture is taken only after the drag
+  threshold so card clicks survive.
+- Pulse reads the deck’s existing analyser in a separate RAF while playing; no
+  second AudioContext. No analyser → static cards.
+- **The container is transparent** (`background: none`, no border/shadow/blur);
+  only the individual cards are frosted glass, so the wallpaper/visualizer
+  shows through. The header carries no “Songs” label; the gear appears only in
+  edit mode, with 10 sliders persisted under `md-cylinder-settings`.
+- Docked 176 px above the player in the deck column with the slot reserved while
+  framed; its own layout box is `md-cylinder-box`; RESET lives in Customize.
+
+### 4.10 Rust shell
+
+`src-tauri/src/` — `lib.rs` registers all commands. Highlights:
+`sources/*` (multi-provider registry/search/play/downloads, `radio_tap`,
+YouTube/Spotify commands), `visualizer/*` (MilkDrop engine, presets, PCM),
+`lyrics.rs` (`lyrics_http_get` with caller timeout + abort),
+`dannify.rs` (extension window/account). `tauri.conf.json` sets
+`additionalBrowserArgs` for WebView2 (`--enable-unsafe-swiftshader
+--ignore-gpu-blocklist`) so WebGL visualizers can start.
+
+### 4.11 Persistence keys (localStorage)
+
+Layout: `md-chrome-offsets`, `md-queue-box`, `md-music-box`, `md-disc-box`,
+`md-cylinder-box`, `md-lyrics-box-on/off`, `md-lyrics-custom`.
+Queue/player: `md-qp-glass`, `md-qp-width`, `md-qp-side`, `md-glass`.
+Playback: `md-track`, `md-playlists`, `md-selected-playlist`, `md-shuffle`,
+`md-repeat`, `md-volume`, `md-crossfade`, `md-crossfade-sec`, `md-normalize`,
+`md-accent-art`. Lyrics: `md-lyrics-provider-order`, `md-lyrics-title`,
+`md-lyrics-*`. Visualizer/wallpaper/CD: `md-voltviz*` (incl.
+`md-voltviz-sonic-topography(-extended)`, the two Sonic ports' own settings
+records), `md-bargraph-*`,
+`md-bc-*`, `md-wall-*`, `md-cd-*`, `md-radio-*`. Boot/safety: `md-boot-attempts`,
+`md-safe-mode`, `md-hard-reset`, `md-fatal`. IndexedDB `md-walkman` holds
+tracks, meta, pinned lyrics, disc art collection, Butterchurn customs and
+wallpapers.
 
 ---
 
-## 6. OPEN THREADS / CAVEATS (honest state)
+## 5. CURRENT UI/UX STATE (the overhaul)
 
-- **Crossfade / standby swap**: logic verified by type-check + review; the
-  *audible* result needs a real listen with local tracks (3s setting). If the
-  user reports a hitch at the element swap or stuck volume, start in
-  `beginXfade` / `promoteStandby` / `takeoverFrom`.
-- **Radio reactivity + radio VISUAL switch**: same — code paths verified, one
-  real listen recommended.
-- **.milk rendering**: converter output verified; shader-heavy real-world
-  presets untested in-app (guide's caveats apply: unsupported HLSL throws into
-  the card's error line; converted equations are `new Function` code — trust).
-- **Pre-existing lint errors** (see §3.2) were deliberately left; if the user
-  asks for a zero-error lint, that's a separate cleanup task.
-- **dannify/data/session.json in the working tree** holds a YouTube
-  visitorData token — gitignored, never commit it.
-- **`graft/` graph is stale** relative to all the work above; run `graft build`
-  when the CLI is reachable.
-- **Demo mp3s** in `app/src/assets/track*.mp3` are unreferenced (candidates
-  for removal, user's call).
-- **Uncommitted work**: everything since `0b67541`. Commit in themed batches
-  when the user asks.
+- **Chrome editor**: every corner/header button, popover and the footer can be
+  nudged anywhere; offsets persist and scale with the viewport; `RESET SCREEN`
+  restores them. Unbounded movement is intentional.
+- **Five stage panels** are freely movable/resizable in the one edit mode:
+  lyrics (per CD state), queue, player, disc, carousel. Rectangles persist;
+  viewport changes remap them proportionally.
+- **Queue/playlists hub** replaced the tracklist and drawer (see 4.4). It docks
+  at a screen edge, auto-hides unless pinned, and has liquid-glass settings.
+- **Player settings** moved out of the queue panel to a main-screen corner knob
+  (`PlayerSettingsPanel.tsx`): crossfade + steps, normalize, accent-from-art,
+  Blurred/Solid. The queue header keeps glass, pin, and the playlist-create
+  button; no player controls live there.
+- **MusicControlPanel.tsx** is the new cast-glass transport body (props pass
+  through; no logic) used docked and framed.
+- **ExtensionPanel.tsx** is the corner hub; ONLINE (Dannify) is its first entry.
+- **Settings panels are resizable** via native `.panel-resizable` corners and
+  share the same glass tokens; resizing is not persisted.
+- **Disc + lyrics**: on/beside-disc lyrics now live inside the disc assembly;
+  moving the disc moves its lyrics. The CD itself is a layout surface.
+- **Visualizer/radio**: radio got a native loopback tap so CORS-less stations
+  can drive the analyser; WebGL failures show a plain explanation; WebView2
+  args were added so GPU visualizers work.
+- **Cylinder Carousel** is the new songs widget above the player (see 4.9).
 
 ---
 
-## 7. HOW THE USER WORKS (match this)
+## 6. RECENT WORK (all uncommitted since HEAD `6eeeee2`)
 
-- Batches of numbered items, each with explicit Acceptance Criteria — check
-  them before saying done, and deliver a SHORT per-item confirmation listing
-  files touched + how the criterion is met.
-- "Do not redesign anything else — keep the existing layout, tokens and
-  behavior intact" is a standing constraint. Hidden-not-removed when asked.
-- The user verifies visually on their machine and reports back with
-  screenshots; treat their repro as ground truth over your theory.
-- They appreciate root-cause analysis over patch-on-patch (several fixes above
-  were found by pixel-level control experiments, not by reading alone — do
-  that when a cause is not provable from code reading).
+1. **Unified queue/playlists hub** — new `QueuePanel.tsx`/`.css` with tabs,
+   search, folder management, track editor, pointer drag reorder, local
+   context-row removal, glass settings, pin/auto-hide; the old tracklist is
+   kept mounted hidden (the drawer file is no longer imported). Home’s queue
+   callbacks/state live near the top of the file; `md-queue-box` is its layout
+   rectangle.
+2. **Generalized layout editor** — `useChromeDrag`/`useChromeLayout` +
+   `DraggableSurface`; all buttons/popovers draggable by offsets; one
+   `editChrome` mode; `LayoutFrame` extended to player, disc and carousel;
+   `CustomizePanel` rewritten as the hub; `chromecheck.mjs` covers it.
+3. **UI consolidation** — `MusicControlPanel`, `PlayerSettingsPanel`,
+   `ExtensionPanel`, `panel-resizable` on the settings popovers, compact glass
+   action chips in `QueuePanel.css`, footer/header cleanups.
+4. **Lyrics stack** — provider registry/order/chain/install/transport (11
+   providers), shell `lyrics_http_get`, parallel fetches with order deciding the
+   winner, per-track pinning/editor/offset, white + metal faces, hidden
+   component chrome, background-vocal suppression, provider badge + green dot.
+5. **Radio/visualizer fixes** — shell `radio_tap` loopback for CORS-less
+   stations, retry/resume handling, WebView2 GPU args, `failedStartMessage()`,
+   capture stream re-taken on every play.
+6. **Disc/lyrics layout** — `md-disc-box` frame, on/beside-disc lyrics inside
+   `discAssembly`, RESET CD in Customize.
+7. **Cylinder Carousel** — new widget (4.9), transparent container, edit-only
+   gear/settings, real tracks/engine state, no second audio graph.
+8. **UI/UX polish pass (latest session)** — carousel feathered (mask on
+   `.cyl-stage`, container forced transparent/unshadowed), carousel sliders
+   isolated from the frame drag (`stopPropagation`), carousel box UNBOUNDED
+   (`LayoutFrame unbounded` + `clampLoose`); every settings panel got the
+   thin scrollbar (global rule on `.settings-panel`/`.panel-resizable`);
+   edit-mode resize FIXED (the drag capture-handler no longer swallows
+   presses on the native resize grip — `useChromeDrag` bails in the bottom-
+   right 22px) and radio opens on a plain CLICK while editing; the radio /
+   CD-settings / wallpaper-settings toggles moved INTO the transport row
+   (`ModeButton` variants; hold-to-open kept outside edit mode), the
+   floating stage buttons are gone; volume slider capped at 150px; the
+   BUFFERING/failure strip deleted outright; favourite hearts added
+   (transport `ModeButton fav` = solid `#a82e2e`, queue panel playlist-row
+   hearts toggling FAVOURITES membership — never in the Current queue tab);
+   lyrics: 2rem padding-top (Hindi clipping), ON DISC/BESIDE DISC buttons
+   removed (props `mode`/`onMode` dropped from LyricsSettingsPanel), provider
+   tag + green dot + SEARCHING pill removed (`data-lyrics-ready` is gone
+   with it — harnesses that keyed on it need updating); CURRENT LINE pill
+   centred via the `translate` PROPERTY (panel-in's animation fill clobbers
+   translateX utilities) with a chrome bar filling scaleX left→right.
+   Verified: tsc clean, eslint 0 errors (4 baseline warnings remain),
+   188 unit tests green, `.verify/polishcheck.mjs` 21/21.
+9. **Sonic Topography ports (latest session)** — the two GPL-3.0 Wallpaper
+   Engine wallpapers (CmzYa's Sonic Topography + Netesfiu's extended fork)
+   integrated as voltviz styles: plain-three scene ports of `MapScene.tsx` +
+   `CustomShaderMaterial.tsx` in `impl/SonicTopography{,Extended}.tsx`,
+   upstream audio engines ported into `sonic/` with WE's listener replaced by
+   analyser-fed 64-bin frames (extended: a real stereo 128-value frame from a
+   channel splitter), themes + per-visualizer settings in `sonic/`
+   (`settings.ts`, GPL `LICENSE`), each with an Overlay settings card
+   (theme/ripples/meteors/idle-wave/spin/peak + intensities) and attribution;
+   registry, `blackFor` and the panel caption updated; `three186.d.ts` added
+   (the alias package ships no types). Verified: tsc clean, eslint clean,
+   188 unit tests green, `vite build` exit 0, `.verify/soniccheck.mjs` 16/16,
+   full `vizcheck` mounts all 17 styles. Audible/audio-reactive verification
+   in the real WebView2 window still owed.
+
+---
+
+## 7. OPEN THREADS / CAVEATS
+
+- **Nothing is committed since `6eeeee2`** beyond the Sonic Topography batch
+  (see Recent Work 9). The rest of the working tree — the whole overhaul +
+  carousel — is still uncommitted. Commit in themed batches when the user asks.
+- **Audible verification still owed on real hardware**: crossfade/standby swap,
+  the radio loopback tap, and the pause keep-alive. Headless proves code paths
+  and UI, not sound.
+- **WebGL in WebView2**: the `additionalBrowserArgs` change is in place but the
+  real window is the only proof for shader-heavy visualizers.
+- **Harness boot overlay**: `#boot` can remain in headless and eat pointer
+  events; remove it or wait for `.gone`. See §2.
+- **`panel-resizable` sizes are not persisted** (only chrome offsets and stage
+  rectangles are). A panel resized by the corner grip returns to its CSS size
+  next session.
+- **Chrome offsets are unbounded** — a surface can be parked off-screen.
+  `RESET SCREEN` in Customize is the recovery.
+- **Old surfaces are rollback, not dead**: `PlaylistPanel.tsx` and the
+  `tracklistPanel` element in Home stay mounted hidden; `PlaylistDrawer.tsx`
+  remains on disk but is no longer imported. A comment in `useChromeLayout.ts`
+  still mentions `md-tracklist-box`; harmless.
+- **README is stale** about the tracklist/queue; this handoff is authoritative.
+- **Provider services are flaky by nature**: live lyrics only prove themselves
+  with `LYRICS_LIVE=1` / `cargo test --lib the_shell_can_reach_every_provider
+  -- --ignored`. Do not re-add a provider marked dead without a fresh probe.
+- **Scratch clutter**: root `.verify/` probes, `app/.verify/`, and
+  `app/nextprev-*.png` / `app/queuefix-*.png` are uncommitted diagnostics;
+  leave unless the user asks for cleanup.
+- **Pre-existing lint**: Home.tsx has four exhaustive-deps warnings (no
+  errors); the current changed set has no lint errors.
+
+---
+
+## 8. HOW THE USER WORKS (match this)
+
+- Batches of numbered items with explicit acceptance criteria. Confirm each
+  item briefly (files touched + how the criterion is met).
+- “Do not redesign anything else — keep the existing layout, tokens and
+  behaviour intact” is a standing constraint. Prefer hidden-not-removed.
+- They verify visually on their machine and report with screenshots; treat
+  their repro as ground truth over your theory.
+- They value root-cause fixes over patches. When a cause is not provable from
+  reading, run a small pixel/DOM control experiment.
+- Keep answers short and concrete; no filler.

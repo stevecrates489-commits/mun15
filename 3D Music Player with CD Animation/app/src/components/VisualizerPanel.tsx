@@ -5,6 +5,7 @@ import { loadVisualizer } from '../features/voltviz/modules'
 import { VOLT_SETTINGS_DEFAULT, VOLT_SETTING_RANGE } from '../features/voltviz/useVoltViz'
 import type { VisualizerSettings } from '../features/voltviz/settings'
 import type { VisualizerModule } from '../features/voltviz/runtime-types'
+import { useChromeDrag, type ChromeOffset } from '../features/layout/useChromeDrag'
 
 interface Props {
   /** the live backdrop's style id, or null for none */
@@ -20,6 +21,10 @@ interface Props {
   /** HIDE UI — chrome out, visual on screen (also bound to H) */
   onHideUi: () => void
   onClose: () => void
+  /** layout editor — drag this panel while an edit session runs */
+  editing?: boolean
+  offset?: ChromeOffset
+  onOffset?: (o: ChromeOffset) => void
 }
 
 /** VoltViz's tuning sliders, with the labels and suffixes its own panel gives
@@ -62,7 +67,11 @@ export default function VisualizerPanel({
   audioState,
   onHideUi,
   onClose,
+  editing = false,
+  offset,
+  onOffset,
 }: Props) {
+  const drag = useChromeDrag({ editing, offset, onOffset })
   const [closing, setClosing] = useState(false)
 
   /* The selected visual's own settings card, when its module exports one.
@@ -73,10 +82,14 @@ export default function VisualizerPanel({
     let live = true
     const entry = volt ? VOLT_STYLES.find((v) => v.id === volt) : undefined
     if (!entry) {
-      setOwnCard(null)
+      queueMicrotask(() => {
+        if (live) setOwnCard(null)
+      })
       return
     }
-    setOwnCard(null)
+    queueMicrotask(() => {
+      if (live) setOwnCard(null)
+    })
     loadVisualizer(entry)
       .then((mod) => {
         if (live) setOwnCard(() => mod.Overlay ?? null)
@@ -93,9 +106,12 @@ export default function VisualizerPanel({
 
   return (
     <div
-      className={`settings-panel fx-blur fixed left-[5%] top-[4.5rem] z-[89] flex max-h-[min(70vh,560px)] w-[min(88vw,460px)] flex-col rounded-2xl border border-white/20 bg-black/75 shadow-[0_24px_70px_rgba(0,0,0,0.65),inset_0_1px_0_rgba(255,255,255,0.08)] backdrop-blur-2xl${
+      className={`settings-panel panel-resizable fx-blur fixed left-[5%] top-[4.5rem] z-[89] flex max-h-[min(70vh,560px)] w-[min(88vw,460px)] flex-col rounded-2xl border border-white/20 bg-black/75 shadow-[0_24px_70px_rgba(0,0,0,0.65),inset_0_1px_0_rgba(255,255,255,0.08)] backdrop-blur-2xl${
         closing ? ' is-closing' : ''
-      }`}
+      } ${drag.editClass}`}
+      style={drag.style}
+      onPointerDownCapture={drag.onPointerDown}
+      onClickCapture={drag.onClickCapture}
     >
       <div className="flex items-center justify-between border-b border-white/10 px-4 py-2.5">
         <span className="font-mono text-[9px] tracking-[0.25em] text-white/50">VISUALISER</span>
@@ -170,8 +186,9 @@ export default function VisualizerPanel({
           ))}
         </div>
         <p className="mt-1.5 font-mono text-[7px] leading-relaxed tracking-[0.1em] text-white/25">
-          VoltViz's styles, painted across the window behind the player from the deck's own
-          analyser. One at a time; OFF returns the plain backdrop.
+          VoltViz's styles plus the two Sonic Topography ports (© CmzYa / © Netesfiu, GPL-3.0),
+          painted across the window behind the player from the deck's own analyser. One at a
+          time; OFF returns the plain backdrop.
         </p>
       </div>
 
