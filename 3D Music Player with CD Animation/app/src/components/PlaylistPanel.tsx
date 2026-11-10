@@ -1,10 +1,8 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
-  AlignJustify,
   AlignLeft,
   Check,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Disc2,
@@ -16,7 +14,6 @@ import {
   Play,
   Plus,
   RefreshCw,
-  Rows3,
   Search,
   Trash2,
   Upload,
@@ -27,6 +24,7 @@ import { cleanTitle } from '../lib/utils'
 import { durationStats, fmt, useDuration } from '../features/playlist/usePlaylist'
 import { DOWNLOADS_FOLDER_ID } from '../features/playlist/usePlaylists'
 import { type SubscribeTime, type Track } from '../hooks/useAudioEngine'
+import { liquidGlass, type LiquidGlassHandle } from '../lib/liquidGlass'
 
 /** How the list is ordered. `manual` is the order the user arranged, so it
  *  is the only one that may be drag-reordered — moving rows inside a sorted
@@ -34,16 +32,6 @@ import { type SubscribeTime, type Track } from '../hooks/useAudioEngine'
  *  then disagrees with. */
 export type TrackSort = 'manual' | 'title' | 'artist' | 'added'
 export type RowDensity = 'compact' | 'comfortable'
-
-/* the sort menu's order and its labels — one source, so the control and its
-   menu can never spell the same option two ways */
-const SORT_ORDER = ['manual', 'title', 'artist', 'added'] as const
-const SORT_LABELS: Record<TrackSort, string> = {
-  manual: 'MANUAL',
-  title: 'TITLE A\u2192Z',
-  artist: 'ARTIST A\u2192Z',
-  added: 'NEWEST FIRST',
-}
 
 interface Props {
   tracks: Track[]
@@ -60,9 +48,8 @@ interface Props {
   query: string
   onQueryChange: (q: string) => void
   sort: TrackSort
-  onSortChange: (s: TrackSort) => void
-  density: RowDensity
-  onDensityChange: (d: RowDensity) => void
+  /** the row size is a fixed choice now (comfortable) — no control */
+  density?: RowDensity
   onSelect: (i: number) => void
   onRemove: (i: number) => void
   onEditMeta: (i: number, anchor: DOMRect) => void
@@ -114,7 +101,6 @@ interface Props {
 const MENU_ITEM =
   'flex w-full items-center gap-2 px-2.5 py-1.5 text-left font-mono text-[9px] tracking-[0.15em] text-white/75 transition-colors hover:bg-white/[0.12] hover:text-white focus-visible:bg-white/[0.12] focus-visible:text-white focus-visible:outline-none'
 const MENU_DIVIDER = 'my-1 h-px bg-white/[0.12]'
-const MENU_CAPTION = 'px-2.5 py-1 font-mono text-[8px] tracking-[0.2em] text-white/45'
 
 /* A menu that must never be clipped.
 
@@ -230,9 +216,7 @@ export default function PlaylistPanel({
   query,
   onQueryChange,
   sort,
-  onSortChange,
-  density,
-  onDensityChange,
+  density = 'comfortable',
   onSelect,
   onRemove,
   onEditMeta,
@@ -321,6 +305,25 @@ export default function PlaylistPanel({
     [tracks],
   )
   const dragIndex = useRef<number | null>(null)
+  /* the panel's own liquid glass, in PASSIVE mode: the filter + map live in
+     the lib, but the backdrop-filter STRING is composed here — one writer.
+     The scroll frost tunes the same property (the wheel over the header),
+     so it composes the refraction url with its own blur instead of
+     overwriting the lib's value. */
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const [glass, setGlass] = useState<{ filterUrl: string; blur: number; saturate: number } | null>(null)
+  const glassHandleRef = useRef<LiquidGlassHandle | null>(null)
+  useEffect(() => {
+    const el = rootRef.current
+    if (!el) return
+    const g = liquidGlass(el, { attach: false, scale: -64, chroma: 3, blur: 2, saturate: 1.3, fallbackBlur: 16 })
+    glassHandleRef.current = g
+    setGlass({ filterUrl: g.filterUrl, blur: g.blur, saturate: g.saturate })
+    return () => {
+      glassHandleRef.current = null
+      g.destroy()
+    }
+  }, [])
   const [dragOver, setDragOver] = useState<number | null>(null)
   /* which chip is under the dragged row */
   const [chipOver, setChipOver] = useState<number | null>(null)
@@ -433,8 +436,21 @@ export default function PlaylistPanel({
     const box = scrollRef.current
     if (!box) return
     let raf = 0
+    /* hover-reveal suppression: while the list is scrolling the cursor rides
+       OVER rows, and every one it crosses would pop its actions open. A
+       timestamp on the container says "recently scrolled" and the CSS keeps
+       the reveals off until the scroll has truly settled. */
+    let scrollSettle = 0
+    const markScrolling = () => {
+      box.dataset.scrolling = '1'
+      window.clearTimeout(scrollSettle)
+      scrollSettle = window.setTimeout(() => {
+        delete box.dataset.scrolling
+      }, 320)
+    }
     const update = () => {
       raf = 0
+      markScrolling()
       const h = rowH || 1
       /* overscan — 8 rows left thin blanks at the fast end of a fling; 12
          keeps a margin without making the mounted range heavy */
@@ -480,6 +496,8 @@ export default function PlaylistPanel({
       box.removeEventListener('scroll', onScroll)
       ro?.disconnect()
       if (raf) cancelAnimationFrame(raf)
+      window.clearTimeout(scrollSettle)
+      delete box.dataset.scrolling
     }
   }, [rowH, tracks.length, applyWindow])
   /* active-row progress is written straight into the row's bar — the 4Hz
@@ -861,34 +879,8 @@ export default function PlaylistPanel({
   const [barAddAnchor, setBarAddAnchor] = useState<DOMRect | null>(null)
   const barAddRef = useRef<HTMLButtonElement>(null)
 
-  /* ---- one row of controls, always ----
-     The row is a block-level flex container, so what it measures is the
-     panel's own width and cannot change when items are taken out of it — the
-     switch below cannot oscillate. Under the width that fits search + sort +
-     density + menu with their equal gaps, the sort and the density move INTO
-     the ⋯ menu instead of stacking onto a second line. */
-  const barRef = useRef<HTMLDivElement>(null)
-  const [narrowBar, setNarrowBar] = useState(() => typeof window !== 'undefined' && window.innerWidth < 640)
-  /* the sort control opens its own menu, anchored on its rect */
-  const sortBtnRef = useRef<HTMLButtonElement>(null)
-  const [sortAnchor, setSortAnchor] = useState<DOMRect | null>(null)
-  useEffect(() => {
-    const el = barRef.current
-    if (!el || typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver((entries) => {
-      const e = entries[0]
-      /* BORDER box, not content box: the row's own px-3 is part of the width
-         the controls have to fit in, and measuring the content box made the
-         row read 24px narrower than it is — enough to push the sort and the
-         density into the menu on a panel with room for both. */
-      const w = e?.borderBoxSize?.[0]?.inlineSize ?? e?.contentRect.width ?? 0
-      /* measured row: search 124 + sort 104 + density 32 + menu 32 + gaps
-         (3 × 8) = 316, plus the row's own 24px of padding to stay clear */
-      setNarrowBar(w > 0 && w < 345)
-    })
-    ro.observe(el)
-    return () => ro.disconnect()
-  }, [])
+  /* the search reveal — open lives here, the query lives in Home */
+  const [searchOpen, setSearchOpen] = useState(false)
 
   /* the window actually rendered: whatever the scroll has asked for, WIDENED
      during render to also hold the playing row. Widening here rather than in
@@ -916,19 +908,31 @@ export default function PlaylistPanel({
 
   return (
     <div
-      className="glass-panel fx-blur mt-6 flex min-h-[200px] flex-1 flex-col overflow-hidden rounded-xl border border-white/10 bg-black/45 shadow-[0_12px_44px_rgba(0,0,0,0.5)] backdrop-blur-[20px]"
+      ref={rootRef}
+      className="glass-panel fx-blur tracklist-glass mt-6 flex min-h-[200px] flex-1 flex-col overflow-hidden rounded-2xl border border-white/10 bg-black/45 shadow-[0_18px_56px_rgba(0,0,0,0.55),inset_0_1px_0_rgba(255,255,255,0.07)] backdrop-blur-[20px]"
       style={
-        headerBlur > 0
+        glass
           ? {
-              /* the WHOLE panel frosts, not just the header: the wheel over
-                 the header tunes one level (0–20) and the ROOT's background
-                 and blur follow it — header and list reveal the wallpaper
-                 together. Level 0 paints nothing: the default glass below. */
-              backdropFilter: `blur(${headerBlur}px)`,
-              WebkitBackdropFilter: `blur(${headerBlur}px)`,
-              backgroundColor: 'rgba(255, 255, 255, 0.05)',
+              /* ONE writer: the refraction url is always in the chain; the
+                 scroll frost swaps its blur part while the wheel is over the
+                 header and restores the resting blur at level 0. */
+              backdropFilter:
+                headerBlur > 0
+                  ? `${glass.filterUrl} blur(${headerBlur}px) saturate(${glass.saturate})`
+                  : `${glass.filterUrl} blur(${glass.blur}px) saturate(${glass.saturate})`,
+              backgroundColor: headerBlur > 0 ? 'rgba(255, 255, 255, 0.05)' : undefined,
             }
-          : undefined
+          : headerBlur > 0
+            ? {
+                /* the WHOLE panel frosts, not just the header: the wheel over
+                   the header tunes one level (0–20) and the ROOT's background
+                   and blur follow it — header and list reveal the wallpaper
+                   together. Level 0 paints nothing: the default glass below. */
+                backdropFilter: `blur(${headerBlur}px)`,
+                WebkitBackdropFilter: `blur(${headerBlur}px)`,
+                backgroundColor: 'rgba(255, 255, 255, 0.05)',
+              }
+            : undefined
       }
     >
       {/* the header: chips, then the search/sort row, then the view's numbers —
@@ -937,15 +941,14 @@ export default function PlaylistPanel({
           below is the list's own scrolling and is never touched. */}
       <div
         ref={headerRef}
-        className="relative"
+        className="relative z-[1]"
       >
-      {/* quick-switch: every playlist one click away, right above the list.
-          While a row is being dragged they become drop targets too — drag a
-          track onto a chip and it lands in that playlist. When the row
-          overflows, edge arrows pan it: the left one only exists once the
-          row has actually been scrolled right, and neither shows when the
-          chips all fit. Each chip wears its view's count. */}
-      <div className="relative flex items-center border-b border-white/10">
+      {/* quick-switch as SCROLLABLE TABS: every playlist one tab away, its
+          tracks under it. Tabs, not pill chips — the underline carries the
+          selection, the strip scrolls when a library outgrows the panel, and
+          the edge arrows pan it. While a row is being dragged the tabs are
+          still drop targets (drag a track onto a tab). */}
+      <div className="relative flex items-center border-b border-white/[0.08]">
         {chipArrows.left && (
           <button
             onClick={() => panChips(-1)}
@@ -958,9 +961,11 @@ export default function PlaylistPanel({
         )}
         <div
           ref={chipsRef}
-          className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto px-3 py-2 [scrollbar-width:none]"
+          className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto px-2 [scrollbar-width:none]"
         >
-        {chips.map((c) => {
+        {chips
+          .filter((c) => c.id != null)
+          .map((c) => {
           const on = c.id === activeChipId
           const dropOn = dragging && chipOver === c.id && c.id != null
           return (
@@ -973,20 +978,34 @@ export default function PlaylistPanel({
               onChipSelect(c.id)
             }}
               data-chip-id={c.id ?? undefined}
-              className={`shrink-0 rounded-full border px-3 py-1.5 font-mono text-[10px] tracking-[0.16em] transition-colors duration-200 ${
-                on
-                  ? 'border-white/40 bg-white/15 text-white'
-                  : 'border-white/[0.14] bg-white/[0.04] text-white/50 hover:border-white/30 hover:text-white/80'
-              } ${dropOn ? 'border-emerald-300/70 bg-emerald-400/15 text-emerald-100' : ''}`}
-              title={c.id == null ? 'Show the whole library' : `Show ${c.name} — drop a track to add it`}
+              className={`group/tab relative shrink-0 px-3 pb-2 pt-2.5 font-mono text-[10px] tracking-[0.14em] transition-colors duration-200 ${
+                on ? 'text-white' : 'text-white/45 hover:text-white/85'
+              } ${dropOn ? 'text-emerald-200' : ''}`}
+              title={`Show ${c.name} — drop a track to add it`}
             >
               {c.name}
               {c.count != null && (
-                <span className="ml-1.5 tabular-nums text-white/45">{c.count}</span>
+                <span className={`ml-1.5 tabular-nums ${on ? 'text-white/55' : 'text-white/30'}`}>{c.count}</span>
               )}
+              {/* the selection: one underline, lit with the art's accents —
+                  it slides in on selection and reads as the tab's edge */}
+              <span
+                aria-hidden
+                className={`absolute inset-x-2 bottom-0 h-[2px] rounded-full transition-opacity duration-200 ${
+                  on || dropOn ? 'opacity-100' : 'opacity-0 group-hover/tab:opacity-60'
+                }`}
+                style={
+                  dropOn
+                    ? { background: 'rgba(110, 231, 183, 0.9)' }
+                    : {
+                        background:
+                          'linear-gradient(90deg,var(--accent-a,#7dd8ff),var(--accent-b,#c99cff),var(--accent-a,#ff9dd8))',
+                      }
+                }
+              />
             </button>
           )
-        })}
+          })}
         <button
           onClick={onNewChip}
           aria-label="New playlist"
@@ -1012,23 +1031,39 @@ export default function PlaylistPanel({
           equal gaps, right-aligned, never wrapping. Nothing floats on a row
           of its own: add / import / export / group live inside the ⋯ menu. */}
       <div
-        ref={barRef}
-        className="flex flex-nowrap items-center justify-end gap-2 border-b border-white/10 px-3 py-2.5"
+        className="relative flex flex-nowrap items-center justify-end gap-2 border-b border-white/10 px-3 py-2"
       >
+        {boot === 'loading' && (
+          <span className="mr-auto flex shrink-0 items-center gap-1.5 font-mono text-[8px] tracking-[0.15em] text-white/40">
+            <Disc2 size={9} className="animate-spin" style={{ animationDuration: '1.6s' }} />
+            LOADING
+          </span>
+        )}
+        {importing && (
+          <span className="mr-auto flex shrink-0 items-center gap-1.5 font-mono text-[8px] tracking-[0.15em] text-amber-300">
+            <Disc2 size={9} className="animate-pulse" />
+            READING {importing.done}/{importing.total}
+          </span>
+        )}
+        {importHint && (
+          <span className="mr-auto max-w-[180px] truncate shrink-0 font-mono text-[8px] tracking-[0.12em] text-cyan-300/80">
+            {importHint}
+          </span>
+        )}
         {/* downloads sync — only in the Downloads Online view. The socket
             usually brings a finished download in by itself; this is the
-            manual path: one click, one pass, spin while it runs. */}
+            manual path: one click, one pass, spin while it runs. Icon-only:
+            the full-text button used to clip out of narrow layout frames. */}
         {activeChipId === DOWNLOADS_FOLDER_ID && onRefreshDownloads && (
-          <div className="mr-auto flex items-center gap-2">
+          <div className="mr-auto flex items-center gap-1.5">
             <button
               onClick={onRefreshDownloads}
               disabled={refreshingDownloads}
               title="Check the extension for finished downloads"
               aria-label="Refresh downloads"
-              className="flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-white/15 bg-white/[0.06] px-2.5 font-mono text-[9px] tracking-[0.16em] text-white/60 transition hover:border-white/40 hover:text-white disabled:opacity-50"
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-white/15 bg-white/[0.06] text-white/60 transition hover:border-white/40 hover:text-white disabled:opacity-50"
             >
-              <RefreshCw size={11} className={refreshingDownloads ? 'animate-spin' : undefined} />
-              {refreshingDownloads ? 'CHECKING…' : 'REFRESH'}
+              <RefreshCw size={12} className={refreshingDownloads ? 'animate-spin' : undefined} />
             </button>
             {refreshNote && (
               <span className="font-mono text-[8px] tracking-[0.15em] text-emerald-300/80">
@@ -1037,111 +1072,82 @@ export default function PlaylistPanel({
             )}
           </div>
         )}
-        {/* search — filters the list the app acts on, so the value lives in
-            Home and comes back down as `query` */}
-        <label className="flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-white/15 bg-white/[0.06] px-2.5 transition focus-within:border-white/40">
-          <Search size={11} className="shrink-0 text-white/40" />
-          <input
-            value={query}
-            onChange={(e) => onQueryChange(e.target.value)}
-            placeholder="SEARCH"
-            aria-label="Search the tracklist"
-            className="w-[84px] bg-transparent font-mono text-[10px] tracking-[0.16em] text-white/80 outline-none placeholder:text-white/30"
-          />
-          {query && (
-            <button
-              onClick={() => onQueryChange('')}
-              aria-label="Clear search"
-              className="shrink-0 text-white/40 transition hover:text-white"
-            >
-              <X size={10} />
-            </button>
-          )}
-        </label>
-
-        {!narrowBar && (
-          <button
-            ref={sortBtnRef}
-            onClick={() =>
-              setSortAnchor((a) => (a ? null : (sortBtnRef.current?.getBoundingClientRect() ?? null)))
-            }
-            aria-label="Sort the tracklist"
-            aria-haspopup="menu"
-            aria-expanded={!!sortAnchor}
-            title="Sort: manual order is the only one you can drag-reorder"
-            className="flex h-8 w-[104px] shrink-0 items-center justify-between gap-1 rounded-full border border-white/15 bg-white/[0.06] pl-2.5 pr-2 transition hover:border-white/40"
-          >
-            <span className="min-w-0 truncate font-mono text-[9px] tracking-[0.15em] text-white/60">
-              {SORT_LABELS[sort]}
-            </span>
-            <ChevronDown size={11} className="shrink-0 text-white/40" />
-          </button>
-        )}
-
-        {!narrowBar && (
-          <button
-            onClick={() => onDensityChange(density === 'compact' ? 'comfortable' : 'compact')}
-            aria-label={density === 'compact' ? 'Switch to comfortable rows' : 'Switch to compact rows'}
-            title={density === 'compact' ? 'Comfortable rows' : 'Compact rows'}
-            className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-white/15 bg-white/[0.06] text-white/50 transition hover:border-white/40 hover:text-white"
-          >
-            {density === 'compact' ? <Rows3 size={12} /> : <AlignJustify size={12} />}
-          </button>
-        )}
-
-        {sortAnchor && (
-          <FloatingMenu
-            anchor={sortAnchor}
-            width={172}
-            ignore={sortBtnRef}
-            onClose={() => setSortAnchor(null)}
-          >
-            <div className={MENU_CAPTION}>SORT</div>
-            {(SORT_ORDER as readonly TrackSort[]).map((s) => (
-              <button
-                key={s}
-                className={MENU_ITEM}
-                onClick={() => {
-                  setSortAnchor(null)
-                  clearSelection()
-                  onSortChange(s)
-                }}
-              >
-                <span className="grid w-3 shrink-0 place-items-center">
-                  {sort === s && <Check size={11} strokeWidth={3} className="text-emerald-300" />}
-                </span>
-                <span className="min-w-0 flex-1">{SORT_LABELS[s]}</span>
-              </button>
-            ))}
-          </FloatingMenu>
-        )}
+        {/* search as a REVEAL, not a fixture: the icon sits in the toolbar,
+            the field slides over the top of the panel while it lives. The
+            query itself stays up in Home — only the opening/closing is ours. */}
+        <button
+          onClick={() => setSearchOpen(true)}
+          aria-label="Search the tracklist"
+          aria-expanded={searchOpen}
+          title="Search"
+          className={`grid h-8 w-8 shrink-0 place-items-center rounded-full border transition ${
+            searchOpen || query
+              ? 'border-white/35 bg-white/[0.08] text-white'
+              : 'border-white/15 bg-white/[0.06] text-white/50 hover:border-white/40 hover:text-white'
+          }`}
+        >
+          <Search size={12} />
+        </button>
 
         {/* player settings live in the playlists drawer now — this row stays
-            [search] [sort ▾] [density] [⋯] */}
+            [search] [⋯] */}
 
         <ListMenu
-          narrow={narrowBar}
-          sort={sort}
-          onSortChange={(s) => {
-            clearSelection()
-            onSortChange(s)
-          }}
-          density={density}
-          onDensityChange={onDensityChange}
           groupBy={groupBy}
           onGroupByChange={onGroupByChange}
           onAdd={onAdd}
           onImport={onImport}
           onExport={onExport}
         />
+
+        {/* the revealed search field, laid OVER the toolbar: opens on the
+            icon, closes on X or Escape, and closing clears the query so no
+            stale filter outlives its field */}
+        {searchOpen && (
+          <div className="absolute inset-0 z-[5] flex items-center gap-2 bg-black/50 px-3 backdrop-blur-sm">
+            <Search size={12} className="shrink-0 text-white/50" />
+            <input
+              autoFocus
+              value={query}
+              onChange={(e) => onQueryChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  setSearchOpen(false)
+                  onQueryChange('')
+                }
+              }}
+              placeholder="SEARCH"
+              aria-label="Search the tracklist"
+              className="min-w-0 flex-1 bg-transparent font-mono text-[10px] tracking-[0.16em] text-white/85 outline-none placeholder:text-white/30"
+            />
+            {query && (
+              <button
+                onClick={() => onQueryChange('')}
+                aria-label="Clear search"
+                className="shrink-0 text-white/40 transition hover:text-white"
+              >
+                <X size={11} />
+              </button>
+            )}
+            <button
+              onClick={() => {
+                setSearchOpen(false)
+                onQueryChange('')
+              }}
+              aria-label="Close search"
+              title="Close search"
+              className="shrink-0 text-white/40 transition hover:text-white"
+            >
+              <X size={12} />
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* the view's numbers — the old TRACKLIST bar's job, now one quiet line
-          at the bottom of the header: count and length on the left, and
-          whatever boot/import is doing on the right. Length appears once
-          every track in the view has been probed (rows probe as they scroll
-          into view, so it fills in on its own). */}
-      <div className="flex min-w-0 items-center gap-2 overflow-hidden border-b border-white/10 px-3 py-1.5">
+      {/* the view's numbers — one whisper-thin line under the toolbar: count
+          and length on the left, boot/import state on the right. It pays its
+          own height back: the rows above and below lost padding for it. */}
+      <div className="flex min-w-0 items-center gap-2 overflow-hidden border-b border-white/[0.08] px-3 py-1">
         <span className="min-w-0 shrink-0 font-mono text-[8px] tracking-[0.2em] text-white/35">
           {tracks.length} {tracks.length === 1 ? 'TRACK' : 'TRACKS'}
           {durStats.known === tracks.length && tracks.length > 0 && (
@@ -1149,21 +1155,10 @@ export default function PlaylistPanel({
           )}
         </span>
         <span className="min-w-0 flex-1" />
-        {boot === 'loading' && (
-          <span className="flex shrink-0 items-center gap-1.5 font-mono text-[8px] tracking-[0.15em] text-white/40">
-            <Disc2 size={9} className="animate-spin" style={{ animationDuration: '1.6s' }} />
-            LOADING
-          </span>
-        )}
         {boot === 'ready' && (
           <span className="ready-fade flex shrink-0 items-center gap-1 font-mono text-[8px] tracking-[0.15em] text-emerald-300">
             <Check size={9} strokeWidth={3} />
             READY
-          </span>
-        )}
-        {importing && (
-          <span className="animate-pulse shrink-0 font-mono text-[8px] tracking-[0.15em] text-amber-300">
-            READING {importing.done}/{importing.total}
           </span>
         )}
         {importHint && (
@@ -1513,22 +1508,12 @@ function RowContextMenu({
    for is one click away here, and the menu carries the same opaque surface
    and the same clamp-to-viewport placement as every other menu. */
 function ListMenu({
-  narrow,
-  sort,
-  onSortChange,
-  density,
-  onDensityChange,
   groupBy,
   onGroupByChange,
   onAdd,
   onImport,
   onExport,
 }: {
-  narrow: boolean
-  sort: TrackSort
-  onSortChange: (s: TrackSort) => void
-  density: RowDensity
-  onDensityChange: (d: RowDensity) => void
   groupBy: 'none' | 'artist'
   onGroupByChange: (g: 'none' | 'artist') => void
   onAdd: () => void
@@ -1602,45 +1587,6 @@ function ListMenu({
               <Check size={11} strokeWidth={3} className="shrink-0 text-emerald-300" />
             )}
           </button>
-
-          {/* on a narrow row the sort and the density have moved in here —
-              the row never stacks a second line to keep them */}
-          {narrow && (
-            <>
-              <div className={MENU_DIVIDER} />
-              <div className={MENU_CAPTION}>SORT</div>
-              {(SORT_ORDER as readonly TrackSort[]).map((s) => (
-                <button
-                  key={s}
-                  className={item}
-                  onClick={() => {
-                    setAnchor(null)
-                    onSortChange(s)
-                  }}
-                >
-                  <span className="grid w-3 shrink-0 place-items-center">
-                    {sort === s && <Check size={11} strokeWidth={3} className="text-emerald-300" />}
-                  </span>
-                  <span className="min-w-0 flex-1">{SORT_LABELS[s]}</span>
-                </button>
-              ))}
-              <div className={MENU_DIVIDER} />
-              <button
-                className={item}
-                onClick={() => {
-                  setAnchor(null)
-                  onDensityChange(density === 'compact' ? 'comfortable' : 'compact')
-                }}
-              >
-                <span className="grid w-3 shrink-0 place-items-center">
-                  <Check size={11} strokeWidth={3} className="text-emerald-300" />
-                </span>
-                <span className="min-w-0 flex-1">
-                  {density === 'compact' ? 'COMPACT ROWS' : 'COMFORTABLE ROWS'}
-                </span>
-              </button>
-            </>
-          )}
         </FloatingMenu>
       )}
     </>
@@ -1759,11 +1705,11 @@ const PlaylistRow = memo(function PlaylistRow({
         }
       }}
       style={enterDelay && animateIn ? { animationDelay: `${enterDelay}ms` } : undefined}
-      className={`playlist-row ${animateIn ? 'playlist-row-in ' : ''}${lifted ? 'playlist-row-drag-origin ' : ''}group relative w-full border-b border-white/[0.07] px-3 text-left transition-colors duration-300 ${
+      className={`playlist-row ${animateIn ? 'playlist-row-in ' : ''}${lifted ? 'playlist-row-drag-origin ' : ''}group relative w-full border-b border-white/[0.055] px-3 text-left transition-[background-color,border-color,box-shadow] duration-300 ${
         reorderable ? 'cursor-grab' : 'cursor-pointer'
-      } ${active ? 'playlist-row-active' : 'hover:bg-white/[0.05]'} ${
+      } ${active ? 'playlist-row-active' : 'hover:bg-white/[0.04]'} ${
         selected && !active ? 'playlist-row-selected' : ''
-      } ${dragOver ? 'bg-white/[0.04]' : ''} ${compact ? 'grid py-2' : 'grid py-3'}`}
+      } ${dragOver ? 'bg-white/[0.04]' : ''} ${compact ? 'grid py-2' : 'grid py-2.5'}`}
     >
       {/* drop indicator while reordering */}
       {dragOver && (
@@ -1789,19 +1735,21 @@ const PlaylistRow = memo(function PlaylistRow({
       {/* the art IS the first column — no row number, and no little pink
           equaliser jumping next to it: hovering the art is what says "play" */}
       <span
-        className={`relative shrink-0 overflow-hidden rounded-[5px] border border-white/15 bg-white/5 ${
+        className={`relative shrink-0 overflow-hidden rounded-[5px] border border-white/[0.12] bg-white/[0.045] ${
           compact ? 'h-7 w-7' : 'h-9 w-9'
         }`}
       >
         {track.cover ? (
-          <img src={track.cover} alt="" className="h-full w-full object-cover" draggable={false} />
+          /* lazy + async: a long library mounts rows constantly, and every
+             one of them used to demand its cover decode immediately */
+          <img src={track.cover} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" draggable={false} />
         ) : (
           <span className="grid h-full w-full place-items-center text-white/25">
             <Disc2 size={compact ? 12 : 14} />
           </span>
         )}
         {!playing && (
-          <span className="absolute inset-0 grid place-items-center rounded-[5px] bg-black/45 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
+          <span className="row-hover-reveal absolute inset-0 grid place-items-center rounded-[5px] bg-black/45 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
             <Play size={12} className="fill-white text-white" />
           </span>
         )}
@@ -1812,12 +1760,12 @@ const PlaylistRow = memo(function PlaylistRow({
       <span className="min-w-0 flex-1">
         <span
           className={`block truncate text-sm font-semibold tracking-wide ${
-            active ? 'text-white' : 'text-white/75 group-hover:text-white'
+            active ? 'text-white' : 'text-white/80 group-hover:text-white'
           }`}
         >
           {title}
         </span>
-        <span className="mt-0.5 block truncate font-mono text-[10px] tracking-[0.16em] text-white/35">
+        <span className="mt-0.5 block truncate font-mono text-[10px] tracking-[0.1em] text-white/40">
           {track.artist}
         </span>
       </span>
@@ -1827,25 +1775,12 @@ const PlaylistRow = memo(function PlaylistRow({
         {fmt(duration)}
       </span>
 
-      {/* [3] hover-only actions — the row stays clean until the pointer is
-              on it (the queued/favourite states stay lit so state is legible) */}
+      {/* [3] the LIKE button is the one action that is always on the row —
+              state you want one tap away. Play-next and the menu reveal on
+              HOVER ONLY, and never while the list is scrolling (the cursor
+              rides over rows during a scroll; popping buttons there read as
+              jitter — .row-hover-reveal + [data-scrolling] in index.css). */}
       <span className="flex shrink-0 items-center gap-0.5">
-        <span
-          role="button"
-          aria-label={queued ? `Remove ${track.title} from the play-next queue` : `Play ${track.title} next`}
-          title={queued ? 'Remove from play-next queue' : 'Play next'}
-          onClick={(e) => {
-            e.stopPropagation()
-            onToggleNext(index)
-          }}
-          className={`grid h-6 w-6 place-items-center rounded-full transition-all duration-150 hover:bg-white/10 ${
-            queued
-              ? 'bg-emerald-400/15 text-emerald-200 opacity-100'
-              : 'text-white/40 opacity-0 hover:text-white group-hover:opacity-100'
-          }`}
-        >
-          <ListPlus size={12} />
-        </span>
         <span
           role="button"
           aria-label={favourite ? `Remove ${track.title} from favourites` : `Add ${track.title} to favourites`}
@@ -1854,32 +1789,67 @@ const PlaylistRow = memo(function PlaylistRow({
             e.stopPropagation()
             onToggleFavourite(track.id)
           }}
-          className={`grid h-6 w-6 place-items-center rounded-full transition-all duration-150 hover:bg-white/10 ${
-            favourite ? 'text-rose-300 opacity-100' : 'text-white/40 opacity-0 hover:text-white group-hover:opacity-100'
+          className={`grid h-6 w-6 place-items-center rounded-full transition-all duration-150 ${
+            favourite ? 'text-rose-300' : 'text-white/25 hover:bg-white/10 hover:text-white'
           }`}
         >
           <Heart size={12} className={favourite ? 'fill-rose-300' : ''} />
         </span>
-        <span className="relative">
+        <span className="row-hover-reveal flex items-center gap-0.5">
           <span
-            ref={btnRef}
             role="button"
-            aria-label={`More actions for ${track.title}`}
-            aria-haspopup="menu"
-            title="More"
+            aria-label={queued ? `Remove ${track.title} from the play-next queue` : `Play ${track.title} next`}
+            title={queued ? 'Remove from play-next queue' : 'Play next'}
             onClick={(e) => {
               e.stopPropagation()
-              setMenuTab('root')
-              setMenuAnchor((a) => (a ? null : (btnRef.current?.getBoundingClientRect() ?? null)))
+              onToggleNext(index)
             }}
-            className="grid h-6 w-6 place-items-center rounded-full text-white/40 opacity-0 transition-all duration-150 hover:bg-white/10 hover:text-white group-hover:opacity-100"
+            className={`grid h-6 w-6 place-items-center rounded-full transition-all duration-150 hover:bg-white/10 ${
+              queued
+                ? 'bg-emerald-400/15 text-emerald-200 opacity-100'
+                : 'text-white/40 opacity-0 hover:text-white group-hover:opacity-100'
+            }`}
           >
-            <MoreHorizontal size={13} />
+            <ListPlus size={12} />
           </span>
-          {menuAnchor && (
-            <FloatingMenu anchor={menuAnchor} width={216} ignore={btnRef} onClose={closeMenu}>
+          <span className="relative">
+            <span
+              ref={btnRef}
+              role="button"
+              aria-label={`More actions for ${track.title}`}
+              aria-haspopup="menu"
+              title="More"
+              onClick={(e) => {
+                e.stopPropagation()
+                setMenuTab('root')
+                setMenuAnchor((a) => (a ? null : (btnRef.current?.getBoundingClientRect() ?? null)))
+              }}
+              className="grid h-6 w-6 place-items-center rounded-full text-white/40 opacity-0 transition-all duration-150 hover:bg-white/10 hover:text-white group-hover:opacity-100"
+            >
+              <MoreHorizontal size={13} />
+            </span>
+            {menuAnchor && (
+              <FloatingMenu anchor={menuAnchor} width={216} ignore={btnRef} onClose={closeMenu}>
               {menuTab === 'root' ? (
                 <>
+                  <button
+                    className={menuRow}
+                    onClick={() => {
+                      closeMenu()
+                      onToggleNext(index)
+                    }}
+                  >
+                    <ListPlus size={12} /> {queued ? 'UNQUEUE' : 'PLAY NEXT'}
+                  </button>
+                  <button
+                    className={menuRow}
+                    onClick={() => {
+                      closeMenu()
+                      onToggleFavourite(track.id)
+                    }}
+                  >
+                    <Heart size={12} /> {favourite ? 'UNFAVOURITE' : 'FAVOURITE'}
+                  </button>
                   <button
                     className={menuRow}
                     onClick={() => {
@@ -1962,6 +1932,7 @@ const PlaylistRow = memo(function PlaylistRow({
               )}
             </FloatingMenu>
           )}
+          </span>
         </span>
       </span>
     </div>

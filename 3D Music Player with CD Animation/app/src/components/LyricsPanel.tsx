@@ -3,6 +3,18 @@ import { Clock } from 'lucide-react'
 import type { AmLyrics } from '@uimaxbai/am-lyrics'
 import '@uimaxbai/am-lyrics/am-lyrics.js'
 import type { LyricsMode } from '../features/lyrics/useLyrics'
+import {
+  PROVIDER_EVENT,
+  installLyricsProviderChain,
+  forceProvider as forceProviderOn,
+} from '../features/lyrics/installProviderChain'
+
+/* The fallback chain of lyric providers goes in before the first element is
+   made. The component's own chain keeps its priority — these are asked only
+   once it has come back empty — and what they return is handed to the
+   component's own parser, so a lyric from any of them is drawn exactly like
+   one from the component's own sources. */
+installLyricsProviderChain()
 
 /** private surface of the component we drive through reflection */
 interface AmLyricsPriv {
@@ -201,6 +213,10 @@ export interface LyricsApi {
   hasLyrics: () => boolean
   /** pull the active line back into view after the user scrolled away */
   resumeScroll: () => void
+  /** the provider currently serving the lyrics */
+  providerId: () => string | null
+  /** ask ONE provider for this track and put its answer on screen */
+  forceProvider: (id: string) => Promise<{ ok: boolean; error?: string }>
 }
 
 interface Props {
@@ -278,6 +294,14 @@ export default function LyricsPanel({
      because it listens on the panel itself, not on the layout. */
   const [scrolled, setScrolled] = useState(false)
   const resumeRef = useRef<() => void>(() => {})
+  /* Which provider is serving the words right now. The chain runs inside the
+     component, so the panel is told rather than asking — the element fires
+     an event when the provider changes, and the name is shown quietly in
+     the corner so the words on screen always say where they came from.
+
+     The ref is what the settings panel polls; the state is what the panel
+     draws. */
+  const providerIdRef = useRef<string | null>(null)
   /* The countdown: one timer, one token. The token is bumped whenever the
      element is rebuilt, so a timer aimed at a song that has already ended
      can never fire into — and cancel — the next song's countdown. */
@@ -327,14 +351,24 @@ export default function LyricsPanel({
      the verdict and blinked the placeholder away. */
   const emptyKey = `${title}\u0000${artist}`
 
+  /* The element's identity: everything that makes it be rebuilt. A rebuilt
+     element is a fresh fetch, so the provider the ref holds stops being true
+     the moment the rebuild happens — the ref is reset in the mount effect. */
+  const buildKey = `${songKey}\u0000${ms ?? ''}\u0000${mode}\u0000${live ? 'live' : ''}`
+
   useEffect(() => {
     const host = hostRef.current
     if (!host || !title) return
     const el = document.createElement('am-lyrics') as unknown as AmLyrics
+    /* The track identity is ALWAYS set, even for a pinned lyric. The element
+       does not fetch when ttml is present, but the settings panel's provider
+       buttons do — and they read songTitle/songArtist off the element. Leaving
+       them unset is what made a pinned track answer "NO TRACK". */
+    el.songTitle = title
+    el.songArtist = effArtist
     /* props FIRST — see note 1 above */
     if (ttml) {
-      /* a pinned/custom lyric, or the radio's own: no songTitle is needed and
-         no request is made */
+      /* a pinned/custom lyric, or the radio's own: no request is made */
       el.ttml = ttml
     } else if (live) {
       /* Live radio. The song HAS a position — the clock dead-reckons it from
@@ -345,11 +379,7 @@ export default function LyricsPanel({
          providers, and a guess would be worse than none. The highlight is
          driven entirely by `currentTime`, which the playhead below feeds it
          from the clock. */
-      el.songTitle = title
-      el.songArtist = effArtist
     } else {
-      el.songTitle = title
-      el.songArtist = effArtist
       el.songDurationMs = ms
       el.duration = ms
       /* free-text fallback for the providers that only take a query */
@@ -372,6 +402,15 @@ export default function LyricsPanel({
       if (typeof t === 'number') seekRef.current(t / 1000)
     }
     el.addEventListener('line-click', onLineClick)
+
+    /* the provider is tracked on the ref — the settings panel polls it; the
+       panel itself no longer draws a provider tag */
+    const onProvider = (e: Event) => {
+      const id = (e as CustomEvent<{ id?: string | null }>).detail?.id ?? null
+      providerIdRef.current = id
+    }
+    el.addEventListener(PROVIDER_EVENT, onProvider)
+    providerIdRef.current = null
 
     /* the controls worth keeping, driven from the lyrics settings panel */
     const priv = el as unknown as AmLyricsPriv
@@ -430,6 +469,15 @@ export default function LyricsPanel({
         const t = getTimeRef.current()
         el.currentTime = t + 0.001
       },
+      providerId: () => providerIdRef.current,
+      /* Ask one provider for this track and put its answer on screen. A
+         provider that has nothing leaves the words on screen alone — the
+         panel never goes blank because a fetch came back empty. */
+      forceProvider: async (id: string) => {
+        const target = elRef.current as unknown as Parameters<typeof forceProviderOn>[0] | null
+        if (!target) return { ok: false, error: 'NO PANEL' }
+        return forceProviderOn(target, id)
+      },
     }
     resumeRef.current = apiRef.current?.resumeScroll ?? (() => {})
 
@@ -441,15 +489,19 @@ export default function LyricsPanel({
       window.clearTimeout(returnTimerRef.current)
       returnTimerRef.current = undefined
     }
-    setScrolled(false)
+    /* a rebuilt element has no scroll countdown. Deferred one microtask so
+       the effect body is not a synchronous state write (the compiler rule),
+       and the cleanup below can cancel it by replacing the element first. */
+    queueMicrotask(() => setScrolled(false))
 
     return () => {
       el.removeEventListener('line-click', onLineClick)
+      el.removeEventListener(PROVIDER_EVENT, onProvider)
       elRef.current = null
       apiRef.current = null
       el.remove()
     }
-  }, [title, effArtist, ms, ttml, apiRef, mode, live])
+  }, [title, effArtist, ms, ttml, apiRef, mode, live, buildKey])
 
   /* the app's sheet — installed after every build. A dedicated effect, so
      re-installing it never rebuilds the element (a rebuild would refetch the
@@ -641,9 +693,13 @@ export default function LyricsPanel({
           wallpaper, and TEXT_CHROME below is what keeps them readable */}
       <div
         ref={hostRef}
-        className="lyrics-host h-full w-full"
+        className={`lyrics-host h-full w-full${phase === 'none' ? ' invisible' : ''}`}
         style={{
           ...vars,
+          /* padding-top keeps the tallest scripts clear of the top fade —
+             Hindi/Punjabi conjunct marks hang above the line box and used to
+             clip at the panel's top edge */
+          paddingTop: '2rem',
           /* brightness is a filter on the whole component — the disc has the
              same control, and words over bright artwork need the same treatment */
           filter: brightness !== 100 ? `brightness(${brightness / 100})` : undefined,
@@ -651,57 +707,29 @@ export default function LyricsPanel({
           WebkitMaskImage: 'linear-gradient(180deg,transparent,black 9%,black 91%,transparent)',
         }}
       />
-      {/* searching — a quiet status line while the providers are asked.
-          Pinned/TTML lyrics arrive without a fetch, so no status for them. */}
-      {phase === 'searching' && !ttml && (
-        <div className="pointer-events-none absolute bottom-2 left-1/2 z-10 -translate-x-1/2">
-          <span className="flex animate-pulse items-center gap-1.5 rounded-full border border-white/10 bg-black/60 px-3 py-1 font-mono text-[7px] tracking-[0.25em] text-white/50 backdrop-blur-md">
-            SEARCHING FOR LYRICS…
-          </span>
-        </div>
-      )}
       {/* no lyrics — a friendly beat, not a dry error. Strictly AFTER the
           search has given up, never during it. */}
       {phase === 'none' && (
         <div className="pointer-events-none absolute inset-0 z-10 grid place-items-center">
-          <div className="pop-in flex flex-col items-center gap-3">
-            <svg width="72" height="72" viewBox="0 0 72 72" fill="none" aria-hidden>
-              {/* the record */}
-              <circle cx="32" cy="40" r="20" stroke="rgba(255,255,255,0.55)" strokeWidth="2" />
-              <circle cx="32" cy="40" r="13" stroke="rgba(255,255,255,0.22)" strokeWidth="1.5" />
-              <circle cx="32" cy="40" r="6" stroke="rgba(255,255,255,0.55)" strokeWidth="2" />
-              <circle cx="32" cy="40" r="1.8" fill="rgba(255,255,255,0.8)" />
-              {/* the note, riding out of the groove */}
-              <path
-                d="M47 18v16.5a5.5 5.5 0 1 1-2.6-4.66c1-.6 2.6-.7 2.6-.7V18h10.2a7.4 7.4 0 0 0-2.4 5.6"
-                stroke="rgba(255,255,255,0.75)"
-                strokeWidth="2.2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-              <path d="M47 18l12 2.6" stroke="rgba(255,255,255,0.75)" strokeWidth="2.2" strokeLinecap="round" />
-            </svg>
+          <div className="pop-in flex flex-col items-center">
             <span className="font-mono text-[10px] tracking-[0.3em] text-white/60">
-              JUST VIBING TO THE BEAT 🎵
-            </span>
-            <span className="font-mono text-[8px] tracking-[0.2em] text-white/30">
-              NO LYRICS FOR THIS ONE — ENJOY THE SOUND
+              NO LYRICS FOUND
             </span>
           </div>
         </div>
       )}
       {/* the countdown itself: a pill naming where the view is headed, with
-          the 3-second bar filling along its bottom edge */}
+          the 3-second bar filling left→right along its bottom edge. Centering
+          uses the `translate` PROPERTY in index.css (panel-in's animation
+          fill would clobber a translateX utility), and the chrome bar + its
+          origin live there too. */}
       {scrolled && (
-        <div className="lyrics-return settings-panel absolute bottom-2 left-1/2 z-[70] -translate-x-1/2 overflow-hidden rounded-full border border-white/15 bg-black/80 px-3 py-1 backdrop-blur-md">
+        <div className="lyrics-return settings-panel absolute bottom-2 z-[70] overflow-hidden rounded-full border border-white/15 bg-black/80 px-3 py-1 backdrop-blur-md">
           <span className="flex items-center gap-1.5 font-mono text-[7px] tracking-[0.18em] text-white/60">
             <Clock size={9} />
             CURRENT LINE
           </span>
-          <span
-            ref={barRef}
-            className="lyrics-return-bar absolute bottom-0 left-0 h-[2px] w-full origin-left bg-emerald-400"
-          />
+          <span ref={barRef} className="lyrics-return-bar absolute bottom-0 left-0 h-[2px] w-full" />
         </div>
       )}
     </div>

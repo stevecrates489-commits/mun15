@@ -1,9 +1,10 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Play, X, Check, Maximize, Minimize, ImagePlus, SlidersHorizontal, Pencil, Mic2, Settings2, Radio, Pin, PinOff, ListMusic, Heart, Globe } from 'lucide-react'
+import { Play, X, Check, Maximize, Minimize, ImagePlus, SlidersHorizontal, Mic2, Settings2, Pin, PinOff, Puzzle } from 'lucide-react'
 import { useLyrics, type LyricsMode } from '../features/lyrics/useLyrics'
-import { useLayoutBox, clampBox, type LayoutBox } from '../features/layout/useLayoutBox'
+import { useLayoutBox, clampBox, clampLoose, type LayoutBox } from '../features/layout/useLayoutBox'
 import { useRadio, getRadioElement } from '../features/radio/useRadio'
 import { loadLocalLyrics, saveLocalLyrics, deleteLocalLyrics, loadTrackOffset, saveTrackOffset, deleteTrackOffset, type LocalLyrics } from '../lib/library'
+import { LYRICS_TITLE_EVENT, getLyricsTitle } from '../lib/lyricsTitle'
 import { getCurrentWindow, currentMonitor, PhysicalSize, PhysicalPosition } from '@tauri-apps/api/window'
 import { useAudioEngine, type Track } from '../hooks/useAudioEngine'
 import { usePlaylist, openFilePicker, filesFromDrop } from '../features/playlist/usePlaylist'
@@ -20,8 +21,11 @@ import chromeUrl from '../assets/chrome.png'
 import DiscCase from '../components/DiscCase'
 import ChromeVisualizer from '../components/ChromeVisualizer'
 import CreatorMenu from '../components/CreatorMenu'
-import Transport from '../components/Transport'
-import PlaylistPanel, { type TrackSort, type RowDensity } from '../components/PlaylistPanel'
+import PlaylistPanel from '../components/PlaylistPanel'
+import type { TrackSort } from '../components/PlaylistPanel'
+import QueuePanel from '../components/QueuePanel'
+import MusicControlPanel from '../components/MusicControlPanel'
+import CylinderCarousel from '../components/CylinderCarousel'
 import PerfMeters from '../components/PerfMeters'
 import CdSettingsPanel from '../components/CdSettingsPanel'
 import TrackMetaEditor from '../components/TrackMetaEditor'
@@ -35,15 +39,18 @@ import { FramePainter } from '../features/visualizer/frames'
 import LyricsPanel from '../components/LyricsPanel'
 import LyricsSettingsPanel from '../components/LyricsSettingsPanel'
 import CustomizePanel from '../components/CustomizePanel'
+import PlayerSettingsPanel from '../components/PlayerSettingsPanel'
+import ExtensionPanel from '../components/ExtensionPanel'
 import LayoutFrame from '../components/LayoutFrame'
+import DraggableSurface from '../components/DraggableSurface'
+import { useChromeLayout } from '../features/layout/useChromeLayout'
 import LyricsEditor from '../components/LyricsEditor'
 import WallpaperSettingsPanel from '../components/WallpaperSettingsPanel'
-import PlaylistDrawer from '../components/PlaylistDrawer'
 import DannifyWindow, { type DannifyHandle } from '../features/dannify/DannifyWindow'
 import { useDannifySync } from '../features/dannify/useDannifySync'
 import { onDannifyDownloadsDone } from '../features/dannify/downloads'
 import ColorPicker from '../components/ColorPicker'
-import { usePlaylists } from '../features/playlist/usePlaylists'
+import { usePlaylists, DOWNLOADS_FOLDER_ID } from '../features/playlist/usePlaylists'
 
 /* heavy subtrees re-render only when their own props change — the
    timeupdate-driven re-renders stop at the memo boundary */
@@ -153,7 +160,10 @@ export default function Home() {
     toggleFavourite,
   } = playlists
   const { addFiles: addLibraryFiles, removeTrackAt, reorderTracks: reorderLibraryTracks } = playlist
-  const [playlistOpen, setPlaylistOpen] = useState(false)
+  /* the unified queue/playlists hub — the tracklist and drawer it replaces
+     stay mounted but hidden (see below) */
+  const [panelOpen, setPanelOpen] = useState(true)
+  const [queueTab, setQueueTab] = useState<'q' | 'p'>('q')
   /* the online extension — its own app, its own player, its own library */
   const [dannifyOpen, setDannifyOpen] = useState(false)
   const [colorPickerOpen, setColorPickerOpen] = useState(false)
@@ -185,6 +195,38 @@ export default function Home() {
     return head
   }, [syncNextUp])
 
+  /* the queue panel's writes: play-next goes to the head, add goes to the
+     tail, and neither ever lets the same id sit in the queue twice */
+  const addToNextUp = useCallback(
+    (trackId: number) => {
+      if (nextUpRef.current.includes(trackId)) return
+      syncNextUp([...nextUpRef.current, trackId])
+    },
+    [syncNextUp],
+  )
+  const playNextTrack = useCallback(
+    (trackId: number) => {
+      syncNextUp([trackId, ...nextUpRef.current.filter((id) => id !== trackId)])
+    },
+    [syncNextUp],
+  )
+  const removeFromNextUp = useCallback(
+    (trackId: number) => syncNextUp(nextUpRef.current.filter((id) => id !== trackId)),
+    [syncNextUp],
+  )
+  const clearNextUp = useCallback(() => syncNextUp([]), [syncNextUp])
+  const reorderNextUp = useCallback(
+    (from: number, to: number) => {
+      const cur = nextUpRef.current
+      if (from === to || from < 0 || to < 0 || from >= cur.length || to >= cur.length) return
+      const next = [...cur]
+      const [moved] = next.splice(from, 1)
+      next.splice(to, 0, moved)
+      syncNextUp(next)
+    },
+    [syncNextUp],
+  )
+
   /* the playlist currently being viewed. The main tracklist is a VIEW of
      this folder, not a snapshot taken when playback started — that is what
      keeps both panels in sync while tracks are added, removed or reordered.
@@ -192,9 +234,9 @@ export default function Home() {
      keeps driving the disc face, across reloads. */
   const [selectedFolderId, setSelectedFolderId] = useState<number | null>(() => {
     const raw = localStorage.getItem('md-selected-playlist')
-    if (raw == null) return null
+    if (raw == null) return DOWNLOADS_FOLDER_ID /* no "all" view — a playlist, always */
     const n = Number(raw)
-    return Number.isFinite(n) ? n : null
+    return Number.isFinite(n) ? n : DOWNLOADS_FOLDER_ID
   })
   const selectedFolderIdRef = useRef<number | null>(null)
   useEffect(() => {
@@ -213,21 +255,14 @@ export default function Home() {
     [playlists.folders, selectedFolderId],
   )
 
-  /* The tracklist's search, sort and row size. They live here rather than in
-     the panel because `visibleTracks` IS the list every handler acts on:
-     filtering or sorting inside the panel would hand select/remove/reorder
-     indices that no longer match this array. */
+  /* The tracklist's search and order. They live here rather than in the panel
+     because `visibleTracks` IS the list every handler acts on. Sort has no UI
+     for now — manual is the only order, and the only one you can drag-reorder. */
   const [listQuery, setListQuery] = useState('')
-  const [listSort, setListSort] = useState<TrackSort>('manual')
+  const [listSort] = useState<TrackSort>('manual')
   /* grouping is a view too: grouping by artist orders the list by artist,
      so the panel's header always sits on the run it names */
   const [groupBy, setGroupBy] = useState<'none' | 'artist'>('none')
-  const [listDensity, setListDensity] = useState<RowDensity>(() =>
-    localStorage.getItem('md-row-density') === 'compact' ? 'compact' : 'comfortable',
-  )
-  useEffect(() => {
-    localStorage.setItem('md-row-density', listDensity)
-  }, [listDensity])
 
   const visibleTracks = useMemo(() => {
     const base = !selectedFolder
@@ -253,6 +288,13 @@ export default function Home() {
     else sorted.reverse() /* newest first — imports append */
     return sorted
   }, [selectedFolder, playlist.tracks, listQuery, listSort, groupBy])
+
+  /* the carousel reads a plain, stable slice of the active list — new object
+     identity every render would restart its analyser pulse loop */
+  const carouselTracks = useMemo(
+    () => visibleTracks.map(({ id, title, artist, cover }) => ({ id, title, artist, cover })),
+    [visibleTracks],
+  )
 
   const libIndex = useCallback(
     (trackId: number) => playlist.tracks.findIndex((t) => t.id === trackId),
@@ -317,15 +359,13 @@ export default function Home() {
     [playlists.folders, libIndex],
   )
 
-  const playAll = useCallback(
-    (folderId: number) => {
-      const folder = playlists.folders.find((f) => f.id === folderId)
-      if (!folder) return
-      setSelectedFolderId(folderId)
-      if (!folder.trackIds.length) return
-      playFolderTrack(folderId, 0)
+  const renameFromQueuePanel = useCallback(
+    (trackId: number, title: string) => {
+      const t = playlist.tracks.find((x) => x.id === trackId)
+      if (!t) return
+      void playlist.renameTrack(trackId, title, t.artist)
     },
-    [playlists.folders, playFolderTrack],
+    [playlist],
   )
 
   const deleteFolder = useCallback(
@@ -573,9 +613,34 @@ export default function Home() {
   const [customizeOpen, setCustomizeOpen] = useState(false)
   const [customizeClosing, setCustomizeClosing] = useState(false)
   const [customizePos, setCustomizePos] = useState<{ x: number; y: number } | null>(null)
-  const [editLyrics, setEditLyrics] = useState(false)
-  const [editTracklist, setEditTracklist] = useState(false)
-  const isEditingLayout = editLyrics || editTracklist
+
+  /* ---- the extension hub ----
+     Everything that is added BESIDE the player lives here: ONLINE (Dannify)
+     is the first entry. The corner keeps one button, and the hub grows a row,
+     so extensions never each take a slot in the stage chrome. */
+  const [extensionOpen, setExtensionOpen] = useState(false)
+  const [extensionClosing, setExtensionClosing] = useState(false)
+  const [extensionPos, setExtensionPos] = useState<{ x: number; y: number } | null>(null)
+
+  /* ---- player settings — the popup card on the main screen ----
+     Moved out of the queue panel (its gear pop) so playback controls live
+     where playback is; the queue panel keeps glass + pin only. */
+  const [psOpen, setPsOpen] = useState(false)
+  const [psPos, setPsPos] = useState<{ x: number; y: number } | null>(null)
+
+  /* ---- every floating button and panel, arranged ----
+     The three stage panels have rectangles and resize handles; everything
+     else (the corner buttons, their groups, and every settings popover)
+     moves by a saved OFFSET, so it keeps living where it belongs and the
+     arrangement is a nudge, not a relayout. Editing is available in every
+     edit session, and on its own from the Customize hub. */
+  const chromeLayout = useChromeLayout()
+  const chromeScale = chromeLayout.scale
+  const [editChrome, setEditChrome] = useState(false)
+  /* ONE edit mode. It covers the floating chrome AND the three stage panels —
+     there are no per-panel edit switches: entering it makes everything
+     editable, and SAVE LAYOUT is the only way out. */
+  const isEditingLayout = editChrome
 
   /* hide/show the whole CD assembly (disc + chrome arms + case + sheens) —
      a viewing preference, persisted like the other cd settings */
@@ -626,6 +691,27 @@ export default function Home() {
      point and this effect stays out of the way. */
   const radioPauseStream = radio.pauseStream
   const radioClearSong = radio.clearSong
+
+  /* playing from the queue panel: a row that belongs to a folder makes that
+     folder the playing context (so the rest of the queue follows it); a
+     library row is selected in place without changing the folder. */
+  const playFromQueuePanel = useCallback(
+    (trackId: number, folderId?: number) => {
+      if (folderId != null) {
+        const folder = playlists.folders.find((f) => f.id === folderId)
+        const at = folder?.trackIds.indexOf(trackId) ?? -1
+        if (at !== -1) {
+          playFolderTrack(folderId, at)
+          return
+        }
+      }
+      const li = libIndex(trackId)
+      if (li === -1) return
+      radioClearSong()
+      engRef.current?.select(li)
+    },
+    [playlists.folders, playFolderTrack, libIndex, radioClearSong],
+  )
 
   /* ── the visualiser ────────────────────────────────────────────────────
      The engine is native and does the drawing; this side owns the AUDIO and
@@ -822,19 +908,47 @@ export default function Home() {
      The lyrics rectangle follows the CD: metallic on and white off get their
      own saved box (the legacy single-box key migrates into the CD-on slot),
      because the words read best in different places depending on whether the
-     disc is there to share the stage. The tracklist keeps one box — it exists
-     in both CD states. */
-  const tlLayout = useLayoutBox('md-tracklist-box')
+     disc is there to share the stage. The QUEUE PANEL keeps one box — it
+     replaced the old tracklist as the single surface. */
+  const queueLayout = useLayoutBox('md-queue-box')
   /* the setters are stable callbacks; destructured so the handlers below can
      depend on them (not on the hook's fresh-every-render return object) */
-  const { box: tlBox, setBox: tlSetBox } = tlLayout
+  const { box: queueBox, setBox: queueSetBox } = queueLayout
+  /* the music control panel is editable like the queue panel — its own box,
+     its own edit session, one RESET in the customize hub */
+  const musicLayout = useLayoutBox('md-music-box')
+  const { box: musicBox, setBox: musicSetBox } = musicLayout
+  const [musicSeed, setMusicSeed] = useState<LayoutBox | null>(null)
+  const musicPanelRef = useRef<HTMLDivElement>(null)
+  const musicFramed = editChrome || !!musicBox
+  /* the disc itself is a layout surface too — moving / resizing it uses the
+     same editor as the panels, so the whole deck can be arranged by hand */
+  const discLayout = useLayoutBox('md-disc-box')
+  const { box: discBox, setBox: discSetBox } = discLayout
+  const [discSeed, setDiscSeed] = useState<LayoutBox | null>(null)
+  const discPanelRef = useRef<HTMLDivElement>(null)
+  const discFramed = editChrome || !!discBox
+  /* the cylinder widget above the player controls — its own layout surface,
+     so edit mode can move/resize it like every other panel */
+  const carouselLayout = useLayoutBox('md-cylinder-box')
+  const { box: carouselBox, setBox: carouselSetBox } = carouselLayout
+  const [carouselSeed, setCarouselSeed] = useState<LayoutBox | null>(null)
+  const carouselPanelRef = useRef<HTMLDivElement>(null)
+  const carouselFramed = editChrome || !!carouselBox
+  const [carouselFocus, setCarouselFocus] = useState(0)
   const { setBoxOn, setBoxOff, setCustom: setLyricsCustom } = lyrics
-  /* the tracklist's natural rectangle, measured the instant edit mode was
-     requested (while the panel is still docked in the deck) — the starting
-     box for a first-ever edit */
-  const [tlSeed, setTlSeed] = useState<LayoutBox | null>(null)
-  const tracklistPanelRef = useRef<HTMLDivElement>(null)
-  const tracklistFramed = editTracklist || !!tlBox
+  /* the queue panel's natural rectangle, measured the instant edit mode was
+     requested (while the panel is still docked at its screen edge) — the
+     starting box for a first-ever edit. A hidden (slid-away) panel reads as
+     off-screen; only a genuinely visible panel seeds. */
+  const [queueSeed, setQueueSeed] = useState<LayoutBox | null>(null)
+  const queuePanelRef = useRef<HTMLElement | null>(null)
+  /* the panel hands its aside over through this stable callback — the seed
+     measurement in enterLayoutEdit reads it */
+  const setQueuePanelEl = useCallback((el: HTMLElement | null) => {
+    queuePanelRef.current = el
+  }, [])
+  const queueFramed = editChrome || !!queueBox
 
   /* the ONE switch that decides where the lyrics live. The stage overlay and
      the custom frame are gated on this single value — NOT on their own
@@ -843,7 +957,7 @@ export default function Home() {
      hypothetical: with independent conditions, a desync between the custom
      flag and a lingering edit session rendered the lyrics TWICE — a sharp
      copy in the overlay and a transformed ghost in the frame.) */
-  const lyricsFramed = lyrics.custom || editLyrics
+  const lyricsFramed = lyrics.custom || editChrome
 
   const lyricBox = cdVisible ? lyrics.boxOn : lyrics.boxOff
   const commitLyricBox = useCallback(
@@ -883,9 +997,19 @@ export default function Home() {
       const sy = h / prev.h
       const remapBox = (b: LayoutBox) =>
         clampBox({ x: b.x * sx, y: b.y * sy, w: b.w * sx, h: b.h * sy })
+      /* the carousel remaps loosely — it is the one unbounded panel, so a
+         saved oversized rectangle must not be clamped back to the viewport */
+      const remapLoose = (b: LayoutBox) =>
+        clampLoose({ x: b.x * sx, y: b.y * sy, w: b.w * sx, h: b.h * sy })
       if (lyrics.boxOn) setBoxOn(remapBox(lyrics.boxOn))
       if (lyrics.boxOff) setBoxOff(remapBox(lyrics.boxOff))
-      if (tlBox) tlSetBox(remapBox(tlBox))
+      if (queueBox) queueSetBox(remapBox(queueBox))
+      if (musicBox) musicSetBox(remapBox(musicBox))
+      if (discBox) discSetBox(remapBox(discBox))
+      if (carouselBox) carouselSetBox(remapLoose(carouselBox))
+      /* the chrome surfaces are offset from their own CSS anchors, so their
+         offsets scale with the viewport instead of staying in old pixels */
+      chromeScale(sx, sy)
     }
     window.addEventListener('resize', remap)
     document.addEventListener('fullscreenchange', remap)
@@ -893,52 +1017,115 @@ export default function Home() {
       window.removeEventListener('resize', remap)
       document.removeEventListener('fullscreenchange', remap)
     }
-  }, [setBoxOn, setBoxOff, tlSetBox, lyrics.boxOn, lyrics.boxOff, tlBox])
+  }, [setBoxOn, setBoxOff, queueSetBox, lyrics.boxOn, lyrics.boxOff, queueBox, musicBox, musicSetBox, discBox, discSetBox, carouselBox, carouselSetBox, chromeScale])
 
-  const enterLyricsEdit = useCallback(
+  /* Entering the one edit mode owns every panel. The lyrics switch to their
+     custom frame (there is no standard-position handle to drag), and the
+     queue panel + player leave the dock as frames seeded from where they sit
+     at that instant — measured BEFORE the mode flips, while both are still
+     docked. Leaving the mode keeps the rectangles (that is the arrangement)
+     and only drops the one-shot seeds. */
+  const enterLayoutEdit = useCallback(
     (on: boolean) => {
-      /* editing implies the custom layout — you cannot arrange the standard
-         positions; saving lands in whichever CD state is live */
-      if (on) setLyricsCustom(true)
-      setEditLyrics(on)
-    },
-    [setLyricsCustom],
-  )
-
-  const enterTracklistEdit = useCallback(
-    (on: boolean) => {
-      if (on && !tlBox) {
-        const r = tracklistPanelRef.current?.getBoundingClientRect()
-        if (r && r.width > 0 && r.height > 0) {
-          const seed = clampBox({ x: r.x, y: r.y, w: r.width, h: r.height })
-          setTlSeed(seed)
-          tlSetBox(seed)
+      if (on) {
+        setLyricsCustom(true)
+        if (!queueBox) {
+          const r = queuePanelRef.current?.getBoundingClientRect()
+          if (r && r.width > 0 && r.height > 0 && r.left >= 0 && r.top >= 0) {
+            const seed = clampBox({ x: r.x, y: r.y, w: r.width, h: r.height })
+            setQueueSeed(seed)
+            queueSetBox(seed)
+          }
         }
+        if (!musicBox) {
+          const r = musicPanelRef.current?.getBoundingClientRect()
+          if (r && r.width > 0 && r.height > 0) {
+            const seed = clampBox({ x: r.x, y: r.y, w: r.width, h: r.height })
+            setMusicSeed(seed)
+            musicSetBox(seed)
+          }
+        }
+        if (!discBox) {
+          const r = discPanelRef.current?.getBoundingClientRect()
+          if (r && r.width > 0 && r.height > 0) {
+            const seed = clampBox({ x: r.x, y: r.y, w: r.width, h: r.height })
+            setDiscSeed(seed)
+            discSetBox(seed)
+          }
+        }
+        if (!carouselBox) {
+          const r = carouselPanelRef.current?.getBoundingClientRect()
+          if (r && r.width > 0 && r.height > 0) {
+            const seed = clampBox({ x: r.x, y: r.y, w: r.width, h: r.height })
+            setCarouselSeed(seed)
+            carouselSetBox(seed)
+          }
+        }
+      } else {
+        setQueueSeed(null)
+        setMusicSeed(null)
+        setDiscSeed(null)
+        setCarouselSeed(null)
       }
-      setEditTracklist(on)
+      setEditChrome(on)
     },
-    [tlBox, tlSetBox],
+    [setLyricsCustom, queueBox, queueSetBox, musicBox, musicSetBox, discBox, discSetBox, carouselBox, carouselSetBox],
   )
 
   /* the SAVE LAYOUT button: the rectangle was already committed on the last
      gesture's pointerup — what this saves is the DECISION to stop editing.
      The chrome (dashed border + handles) only exists while editing. */
   const saveLayout = useCallback(() => {
-    setEditLyrics(false)
-    setEditTracklist(false)
-    setTlSeed(null)
+    setEditChrome(false)
+    setQueueSeed(null)
+    setMusicSeed(null)
+    setDiscSeed(null)
+    setCarouselSeed(null)
   }, [])
 
-  const resetTracklist = useCallback(() => {
-    tlSetBox(null)
-    setTlSeed(null)
-    setEditTracklist(false)
-  }, [tlSetBox])
+  const resetQueueLayout = useCallback(() => {
+    queueSetBox(null)
+    setQueueSeed(null)
+  }, [queueSetBox])
+
+  const resetMusicLayout = useCallback(() => {
+    musicSetBox(null)
+    setMusicSeed(null)
+  }, [musicSetBox])
+
+  /* RESET CD: drop the disc's saved rectangle and let it dock back into the
+     stage — the lyrics go with it, because both are one assembly again. */
+  const resetDiscLayout = useCallback(() => {
+    discSetBox(null)
+    setDiscSeed(null)
+  }, [discSetBox])
+
+  const resetCarouselLayout = useCallback(() => {
+    carouselSetBox(null)
+    setCarouselSeed(null)
+  }, [carouselSetBox])
   /* a stored TTML string for the current track. When present it is fed to the
      component's `ttml` property, which renders it with NO network request —
      that is what makes a pin permanent and makes hand-edited lyrics stick */
   const [localLyrics, setLocalLyrics] = useState<LocalLyrics | null>(null)
   const trackId = track.id >= 0 ? String(track.id) : ''
+
+  /* the title the providers are asked for can be overridden per track from
+     the queue panel's editor. It is read here so the live panel re-fetches
+     the moment the override changes. */
+  const [lyricsTitleOverride, setLyricsTitleOverride] = useState<string | null>(null)
+  useEffect(() => {
+    setLyricsTitleOverride(track.id >= 0 ? getLyricsTitle(track.id) : null)
+  }, [track.id])
+  useEffect(() => {
+    const onTitle = (e: Event) => {
+      const detail = (e as CustomEvent<{ id: number; title: string | null }>).detail
+      if (!detail || detail.id !== track.id) return
+      setLyricsTitleOverride(detail.title)
+    }
+    window.addEventListener(LYRICS_TITLE_EVENT, onTitle)
+    return () => window.removeEventListener(LYRICS_TITLE_EVENT, onTitle)
+  }, [track.id])
 
   /* sync offset is per track and always starts at 0 — a track that has never
      been corrected must never inherit the previous one's value. Loaded per
@@ -1278,7 +1465,6 @@ export default function Home() {
      the disc's spin — a transform write is a compositor operation, so it costs
      nothing to shed later and the governor has no reason to touch it. */
   const titleWrapRef = useRef<HTMLDivElement>(null)
-  const [titleOverflows, setTitleOverflows] = useState(false)
   useEffect(() => {
     const wrap = titleWrapRef.current
     const h1 = wrap?.firstElementChild as HTMLElement | null
@@ -1295,7 +1481,6 @@ export default function Home() {
          while overflowing, so measuring it would grow the text every pass. */
       copyWidth = half.getBoundingClientRect().width
       const overflow = copyWidth > wrap.clientWidth + 4
-      setTitleOverflows(overflow)
       if (!overflow) {
         h1.style.transform = ''
         offset = 0
@@ -1436,6 +1621,11 @@ export default function Home() {
     stepVisible,
   ])
 
+  /* the queue strip's transport — the same walk the main transport uses.
+     Declared before the control panel because that panel is built here. */
+  const qpPrev = useCallback(() => stepVisible(-1), [stepVisible])
+  const qpNext = useCallback(() => stepVisible(1), [stepVisible])
+
   /* the lyrics element, shared by its two homes: the standard overlay (inside
      the stage box) and the CUSTOM-POSITION frame (a fixed rectangle the user
      owns). One definition, so the two can never drift out of sync on props. */
@@ -1444,7 +1634,7 @@ export default function Home() {
       /* the radio has a position too: the song clock dead-reckons
          it from the announcement, so the highlight follows the
          station just as it follows the engine for a library track */
-      title={radio.song ? radio.song.title : track.title}
+      title={radio.song ? radio.song.title : lyricsTitleOverride || track.title}
       artist={radio.song ? radio.song.artist : track.artist}
       duration={radio.song ? 0 : eng.duration}
       live={!!radio.song}
@@ -1466,10 +1656,149 @@ export default function Home() {
     />
   )
 
+  /* The on-disc / beside-disc words belong to the DISC, not to the stage box.
+     They are rendered inside `discAssembly` so moving or resizing the disc in
+     the layout editor carries the lyrics with it — the two are one object.
+     CUSTOM POSITION still owns its own fixed frame, which replaces this. */
+  const discLyricsOverlay =
+    lyrics.enabled && !lyricsFramed && lyricMode !== 'stage' && (allTracks.length > 0 || radio.song) ? (
+      <div
+        className={`lyrics-overlay pointer-events-none absolute inset-0 z-[60] flex items-center ${
+          lyricMode === 'disc-right' ? 'justify-end' : 'justify-start'
+        }`}
+      >
+        <div
+          className={`pointer-events-auto ${
+            lyricMode === 'disc-right' ? 'h-[62%] w-[52%] pl-7 pr-[2%]' : 'h-[72%] w-[78%] pl-[9%] pr-2'
+          }`}
+        >
+          {lyricsPanel}
+        </div>
+      </div>
+    ) : null
+
+  /* the music control panel — one definition, docked in the deck column or
+     living in its LayoutFrame when a rectangle is saved (see musicFramed).
+     All playback props pass through; the panel is a body, not a brain.
+     The radio/CD/wallpaper toggles LIVE here now (they scale with the
+     panel); the radio keeps its hold-to-open gesture outside edit mode and
+     answers a plain click while the edit session runs. */
+  const radioHoldStart = useCallback(() => {
+    if (isEditingLayout) return
+    holdTimerRef.current = window.setTimeout(() => {
+      holdTimerRef.current = 0
+      heldRef.current = true
+      setRadioOpen(true)
+    }, 450)
+  }, [isEditingLayout])
+  const radioHoldEnd = useCallback(() => {
+    if (holdTimerRef.current) window.clearTimeout(holdTimerRef.current)
+    holdTimerRef.current = 0
+  }, [])
+  const radioHoldLeave = radioHoldEnd
+  const radioClickOpen = useCallback(() => {
+    if (isEditingLayout) setRadioOpen(true)
+  }, [isEditingLayout])
+  const controlPanel = (
+    <MusicControlPanel
+      playing={eng.playing}
+      subscribeTime={eng.subscribeTime}
+      duration={eng.duration}
+      shuffle={eng.shuffle}
+      repeat={eng.repeat}
+      volume={eng.volume}
+      favourite={track.id >= 0 && isFavourite(track.id)}
+      onToggleFavourite={() => {
+        if (track.id >= 0) toggleFavourite(track.id)
+      }}
+      onPrev={qpPrev}
+      onNext={qpNext}
+      onToggle={togglePlayback}
+      onToggleShuffle={() => eng.setShuffle((s) => !s)}
+      onCycleRepeat={eng.cycleRepeat}
+      onSetVolume={eng.setVolume}
+      onSeekTo={eng.seekTo}
+      radioOn={radioOpen || !!radio.current}
+      radioLive={radio.playing || radio.connecting}
+      onRadioHoldStart={radioHoldStart}
+      onRadioHoldEnd={radioHoldEnd}
+      onRadioHoldLeave={radioHoldLeave}
+      onRadioClick={radioClickOpen}
+      cdSettingsOpen={cdSettingsOpen}
+      onToggleCdSettings={toggleCdSettings}
+      wallSettingsOpen={wall.wallSettingsOpen}
+      onToggleWallSettings={wall.toggleWallSettings}
+    />
+  )
+
+  /* the cylinder carousel — hooks the app's own list, engine and analyser;
+     no fake tracks and no second audio graph */
+  const playFromCarousel = useCallback(
+    (trackId: number) => playFromQueuePanel(trackId, selectedFolderId ?? undefined),
+    [playFromQueuePanel, selectedFolderId],
+  )
+  const carouselWidget = (
+    <CylinderCarousel
+      tracks={carouselTracks}
+      currentId={track.id >= 0 ? track.id : null}
+      playing={eng.playing}
+      subscribeTime={eng.subscribeTime}
+      duration={eng.duration}
+      getAnalyser={eng.getAnalyser}
+      editing={isEditingLayout}
+      focusedIndex={carouselFocus}
+      onFocusChange={setCarouselFocus}
+      onPlay={playFromCarousel}
+      onToggle={togglePlayback}
+    />
+  )
+
+  /* the disc assembly, shared by the stage and its layout frame — the halo
+     belongs to the disc, so moving the disc takes its glow with it */
+  const discAssembly = cdVisible ? (
+    <div ref={discPanelRef} className="relative h-full w-full">
+      <ChromeVisualizerMemo getAnalyser={eng.getAnalyser} playing={eng.playing} />
+      {/* brightness filters ONLY the CD — on the stage it also swallowed the
+          visualiser canvas, forcing the whole filtered layer to re-raster on
+          every canvas frame (the CD's stutter source) */}
+      <div
+        style={cdBrightness !== 100 ? { filter: `brightness(${cdBrightness / 100})` } : undefined}
+      >
+        <DiscCaseMemo
+          playing={eng.playing}
+          onToggle={togglePlayback}
+          onScratch={eng.seekBy}
+          cover={track.cover ?? null}
+          bpm={discBpm}
+          analyser={eng.getAnalyser}
+          reactive={cdReactive}
+          /* the face resolves: playlist poster (PLAYLIST COVER), track cover
+             (TRACK COVER), the uploaded label, then the stock disc. The
+             upload is the DEFAULT, not a mode. */
+          discArt={activeDiscArt}
+          /* a track cover needs the hub hole to read as a disc; printed
+             faces keep their own centres */
+          hubHole={discArtSource === 'track'}
+          /* beats on the track id so a shared cover still gets the exchange,
+             but only when the cover is what is actually on the platter */
+          faceKey={track.id}
+          swapEnabled={discArtSource === 'track'}
+          speedScale={cdSpeed}
+          frosted={wall.theme === 'custom' && !!wall.wallpaper}
+        />
+      </div>
+      {discLyricsOverlay}
+    </div>
+  ) : null
+
   /* the tracklist element, shared by its two homes: docked in the deck column
      (the standard layout) and the layout-editor frame (its saved rectangle).
      One definition, so the two can never drift out of sync on props. */
+  /* The old pink tracklist is preserved but hidden: the queue panel is the
+     single surface now. Keeping the element mounted means its handlers and
+     layout state still exist if this ever needs to be rolled back. */
   const tracklistPanel = (
+    <div hidden aria-hidden="true" className="hidden">
     <PlaylistPanel
       tracks={visibleTracks}
       trackIndex={activeVisibleIndex}
@@ -1482,9 +1811,6 @@ export default function Home() {
       query={listQuery}
       onQueryChange={setListQuery}
       sort={listSort}
-      onSortChange={setListSort}
-      density={listDensity}
-      onDensityChange={setListDensity}
       groupBy={groupBy}
       onGroupByChange={setGroupBy}
       onSelect={selectVisibleTrack}
@@ -1511,6 +1837,84 @@ export default function Home() {
       onRefreshDownloads={() => void refreshDownloads()}
       refreshingDownloads={dannifyRefreshing}
       refreshNote={dannifyNote}
+    />
+    </div>
+  )
+
+  /* ---- the queue panel, shared by its two homes ----
+     Docked at a screen edge (standard layout) and inside the layout editor's
+     frame (global edit mode / a saved rectangle). One definition, so the two
+     can never drift apart on props. Every handler is a stable callback and
+     the settings object is memoized — the panel is memo()d, so unrelated
+     Home state (radio, visualizer, chrome) re-renders must not touch it. */
+  const qpRequestOpen = useCallback(() => setPanelOpen(true), [])
+  /* the engine setters are destructured so the callbacks below depend on the
+     stable functions themselves — the engine object is fresh every render */
+  const { setCrossfade: engSetCrossfade, setCrossfadeSec: engSetCrossfadeSec, setNormalize: engSetNormalize } = eng
+  /* player settings live on the MAIN screen now (the panel's gear pop was
+     removed): the panel is about the queue and the playlists, not playback */
+  const playerSetting = useCallback(
+    (key: 'crossfade' | 'crossfadeSec' | 'normalize', value: number | boolean) => {
+      if (key === 'crossfade') engSetCrossfade(!!value)
+      else if (key === 'crossfadeSec') engSetCrossfadeSec(Number(value))
+      else engSetNormalize(!!value)
+    },
+    [engSetCrossfade, engSetCrossfadeSec, engSetNormalize],
+  )
+  const playerSettings = useMemo(
+    () => ({ crossfade: eng.crossfade, crossfadeSec: eng.crossfadeSec, normalize: eng.normalize }),
+    [eng.crossfade, eng.crossfadeSec, eng.normalize],
+  )
+  /* renameTrack is a stable useCallback in the playlist hook — destructured
+     for the same reason as the engine setters above */
+  const { renameTrack: qpRenameTrack } = playlist
+  const qpEditTrack = useCallback(
+    (id: number, title: string, artist: string, cover?: string) => {
+      void qpRenameTrack(id, title, artist, cover)
+    },
+    [qpRenameTrack],
+  )
+  const qpLyricsSaved = useCallback(
+    (id: number) => {
+      if (id !== track.id) return
+      void loadLocalLyrics(String(id)).then(setLocalLyrics)
+    },
+    [track.id],
+  )
+  const qpRefreshDownloads = useCallback(() => void refreshDownloads(), [refreshDownloads])
+  const queuePanelEl = (
+    <QueuePanel
+      open={panelOpen}
+      tab={queueTab}
+      onTab={setQueueTab}
+      onRequestOpen={qpRequestOpen}
+      tracks={playlist.tracks}
+      folders={playlists.folders}
+      playingFolderId={selectedFolderId}
+      currentTrackId={track.id >= 0 ? track.id : null}
+      playing={eng.playing}
+      nextUp={nextUp}
+      onPlayTrack={playFromQueuePanel}
+      onAddToQueue={addToNextUp}
+      onPlayNext={playNextTrack}
+      onRemoveFromQueue={removeFromNextUp}
+      onReorderQueue={reorderNextUp}
+      onClearQueue={clearNextUp}
+      onRenameTrack={renameFromQueuePanel}
+      onEditTrack={qpEditTrack}
+      onLyricsSaved={qpLyricsSaved}
+      onCreateFolder={playlists.createFolder}
+      onRenameFolder={playlists.renameFolder}
+      onDeleteFolder={deleteFolder}
+      onAddTrackToFolder={playlists.addTrackToFolder}
+      onRemoveTrackFromFolder={removeFolderTrack}
+      onReorderFolderTracks={playlists.reorderTracks}
+      onUploadFile={uploadToFolder}
+      onRefreshDownloads={qpRefreshDownloads}
+      refreshingDownloads={dannifyRefreshing}
+      refreshNote={dannifyNote}
+      framed={queueFramed}
+      outerRef={setQueuePanelEl}
     />
   )
 
@@ -1708,13 +2112,16 @@ export default function Home() {
           one raster over static backdrops but re-blend every video frame */}
       <div className="bg-layer fx-blend pointer-events-none absolute inset-0 z-[70] opacity-[0.05] mix-blend-overlay scanlines" />
       <div className="bg-layer fx-blend pointer-events-none absolute inset-0 z-[71] opacity-[0.05] grain" />
-      <div className="bg-layer fx-video pointer-events-none absolute inset-0 z-[72]" style={{ boxShadow: 'inset 0 0 180px rgba(0,0,0,0.9)' }} />
+      <div className="bg-layer fx-video pointer-events-none absolute inset-0 z-[72]" style={{ boxShadow: 'inset 0 0 110px rgba(0,0,0,0.5)' }} />
 
       {/* header */}
       {/* header — ABOVE the lyrics overlay (z-60): the whole cluster is one
           stacking context, so a z inside it is capped at the header's own
           level, and the wallpaper colour swatch + its picker must stay
           clickable over a full-screen lyric panel */}
+      {/* the header itself is NOT a draggable surface: every control in it is
+          an individual surface, so a button can be moved without dragging the
+          whole bar (and the bar's layout keeps the stage clear) */}
       <header className="relative z-[65] flex items-center justify-between px-5 py-4 font-mono text-[10px] tracking-[0.25em] text-white/75 sm:px-8">
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-3">
@@ -1725,6 +2132,12 @@ export default function Home() {
             <span className="mr-1 hidden text-[9px] tracking-[0.25em] text-white/45 md:inline">THEME</span>
             {/* colour picker replaces the old flat-black swatch — the default
                 black stays the boot fallback, it just is not a swatch anymore */}
+            <DraggableSurface
+              id="hdr-color"
+              editing={isEditingLayout}
+              offset={chromeLayout.offsets['hdr-color']}
+              onOffset={chromeLayout.setOffset}
+            >
             <button
               aria-label="Wallpaper colour"
               title={
@@ -1754,10 +2167,17 @@ export default function Home() {
                     }
               }
             />
+            </DraggableSurface>
             {/* the live visual's own circle — it sits beside the colour and
                 gradient swatches and opens the visualiser panel that picked
                 it: one circle, on or off, so the panel is always reachable
                 from here */}
+            <DraggableSurface
+              id="hdr-visualizer"
+              editing={isEditingLayout}
+              offset={chromeLayout.offsets['hdr-visualizer']}
+              onOffset={chromeLayout.setOffset}
+            >
             <button
               aria-label="Visualiser options"
               title={
@@ -1785,18 +2205,32 @@ export default function Home() {
                     }
               }
             />
+            </DraggableSurface>
             {THEMES.filter((t) => t.id !== 'black').map((t) => (
-              <button
+              <DraggableSurface
                 key={t.id}
-                aria-label={t.label}
-                title={t.label}
-                onClick={() => wall.setTheme(t.id)}
-                className={`h-4 w-4 rounded-full transition-all duration-150 ${
-                  wall.theme === t.id ? 'ring-2 ring-white/60 ring-offset-2 ring-offset-black' : 'ring-1 ring-white/20 hover:ring-white/45'
-                } ${t.aurora ? 'animate-aurora' : ''}`}
-                style={t.swatch}
-              />
+                id={`hdr-theme-${t.id}`}
+                editing={isEditingLayout}
+                offset={chromeLayout.offsets[`hdr-theme-${t.id}`]}
+                onOffset={chromeLayout.setOffset}
+              >
+                <button
+                  aria-label={t.label}
+                  title={t.label}
+                  onClick={() => wall.setTheme(t.id)}
+                  className={`h-4 w-4 rounded-full transition-all duration-150 ${
+                    wall.theme === t.id ? 'ring-2 ring-white/60 ring-offset-2 ring-offset-black' : 'ring-1 ring-white/20 hover:ring-white/45'
+                  } ${t.aurora ? 'animate-aurora' : ''}`}
+                  style={t.swatch}
+                />
+              </DraggableSurface>
             ))}
+            <DraggableSurface
+              id="hdr-wallpaper"
+              editing={isEditingLayout}
+              offset={chromeLayout.offsets['hdr-wallpaper']}
+              onOffset={chromeLayout.setOffset}
+            >
             <button
               aria-label="Theme: custom wallpaper"
               title={wall.wallpaper ? 'Theme: your wallpaper' : 'Add custom wallpaper (image or video)'}
@@ -1819,6 +2253,7 @@ export default function Home() {
                 <Play size={7} className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 fill-white/80 text-white/80" />
               )}
             </button>
+            </DraggableSurface>
             {colorPickerOpen && (
               <>
                 {/* click-away layer: any click outside the card dismisses it
@@ -1828,6 +2263,12 @@ export default function Home() {
                   onClick={() => setColorPickerOpen(false)}
                   className="fixed inset-0 z-[94] cursor-default"
                 />
+                <DraggableSurface
+                  id="panel-color-picker"
+                  editing={isEditingLayout}
+                  offset={chromeLayout.offsets['panel-color-picker']}
+                  onOffset={chromeLayout.setOffset}
+                >
                 <div className="absolute left-0 top-7 z-[95]">
                   <ColorPicker
                     paint={wall.wallPaint}
@@ -1835,9 +2276,16 @@ export default function Home() {
                     onClose={() => setColorPickerOpen(false)}
                   />
                 </div>
+                </DraggableSurface>
               </>
             )}
             {wall.theme === 'custom' && wall.wallpaper && (
+              <DraggableSurface
+                id="hdr-wallpaper-remove"
+                editing={isEditingLayout}
+                offset={chromeLayout.offsets['hdr-wallpaper-remove']}
+                onOffset={chromeLayout.setOffset}
+              >
               <button
                 aria-label="Remove wallpaper"
                 title="Remove wallpaper"
@@ -1846,12 +2294,19 @@ export default function Home() {
               >
                 <X size={9} />
               </button>
+              </DraggableSurface>
             )}
           </div>
         </div>
         <div className="hidden sm:block">MD WALKMAN · MZ-MUN15H</div>
         <div className="flex items-center gap-4">
           <PerfMeters wallpaperVideo={wall.wallpaper?.type === 'video'} wallVideoElRef={wallVideoElRef} />
+          <DraggableSurface
+            id="hdr-lyrics"
+            editing={isEditingLayout}
+            offset={chromeLayout.offsets['hdr-lyrics']}
+            onOffset={chromeLayout.setOffset}
+          >
           <button
             onClick={lyrics.toggle}
             aria-label="Toggle lyrics"
@@ -1866,10 +2321,17 @@ export default function Home() {
             <Mic2 size={10} />
             LYRICS
           </button>
+          </DraggableSurface>
           {lyrics.enabled && (
             <>
               {/* pin sits beside the gear it belongs to — pinning is a
                   mid-listen action and should not need the panel opening */}
+              <DraggableSurface
+                id="hdr-pin"
+                editing={isEditingLayout}
+                offset={chromeLayout.offsets['hdr-pin']}
+                onOffset={chromeLayout.setOffset}
+              >
               <button
                 aria-label={localLyrics ? 'Unpin these lyrics' : 'Pin these lyrics'}
                 title={localLyrics ? 'Unpin lyrics' : 'Pin lyrics locally'}
@@ -1882,6 +2344,13 @@ export default function Home() {
               >
                 {localLyrics ? <PinOff size={10} /> : <Pin size={10} />}
               </button>
+              </DraggableSurface>
+              <DraggableSurface
+                id="hdr-lyrics-settings"
+                editing={isEditingLayout}
+                offset={chromeLayout.offsets['hdr-lyrics-settings']}
+                onOffset={chromeLayout.setOffset}
+              >
               <button
                 onClick={(e) => {
                   if (lyricsSettingsOpen) {
@@ -1902,71 +2371,119 @@ export default function Home() {
               >
                 <Settings2 size={10} />
               </button>
+              </DraggableSurface>
             </>
           )}
           <span className="hidden sm:inline">MDLP · SP MODE · 74MIN</span>
         </div>
-      </header>
+        </header>
 
-      {/* playlist drawer toggle — parked in the empty top-right corner of the
-          stage (not the header) so it sits beside the tracklist it opens */}
-      <button
-        onClick={() => setPlaylistOpen((o) => !o)}
-        aria-label="Toggle playlists"
-        title={playlistOpen ? 'Hide playlists' : 'Open playlists'}
-        className={`absolute right-5 top-14 z-[85] grid h-10 w-10 place-items-center rounded-full text-black transition-transform duration-150 hover:scale-105 active:scale-95 ${
-          playlistOpen ? 'ring-2 ring-emerald-300/70 ring-offset-2 ring-offset-black' : ''
-        }`}
-        style={{
-          background: 'linear-gradient(145deg,#f4f7fa 0%,#c7ccd4 40%,#9aa2ac 70%,#e8ecf1 100%)',
-          boxShadow:
-            'inset 0 1px 1px rgba(255,255,255,0.9), inset 0 -1px 2px rgba(0,0,0,0.25), 0 4px 14px rgba(0,0,0,0.55)',
-        }}
+      {/* player settings — its own knob in the same corner row, since the
+          panel no longer hosts those switches */}
+      <DraggableSurface
+        id="btn-player-settings"
+        editing={isEditingLayout}
+        offset={chromeLayout.offsets['btn-player-settings']}
+        onOffset={chromeLayout.setOffset}
       >
-        <ListMusic size={15} strokeWidth={2} />
-      </button>
+        <button
+          onClick={(e) => {
+            if (psOpen) {
+              setPsOpen(false)
+              return
+            }
+            const r = e.currentTarget.getBoundingClientRect()
+            setPsPos({ x: r.left, y: r.bottom + 8 })
+            setPsOpen(true)
+          }}
+          data-player-settings-anchor
+          data-liquid-ignore
+          aria-label="Player settings"
+          aria-expanded={psOpen}
+          title="Player settings — crossfade, normalize, glass panels, accent"
+          /* the old queue door's slot (right-52): the only free 40px gap in
+             the corner row — right-[4.25rem] sat ON the Extensions button */
+          className={`absolute right-52 top-14 z-[85] grid h-10 w-10 place-items-center rounded-full text-black transition-transform duration-150 hover:scale-105 active:scale-95 ${
+            psOpen ? 'ring-2 ring-emerald-300/70 ring-offset-2 ring-offset-black' : ''
+          }`}
+          style={{
+            background: 'linear-gradient(145deg,#f4f7fa 0%,#c7ccd4 40%,#9aa2ac 70%,#e8ecf1 100%)',
+            boxShadow:
+              'inset 0 1px 1px rgba(255,255,255,0.9), inset 0 -1px 2px rgba(0,0,0,0.25), 0 4px 14px rgba(0,0,0,0.55)',
+          }}
+        >
+          <Settings2 size={15} strokeWidth={2} />
+        </button>
+      </DraggableSurface>
 
       {/* the Customize hub — third button in the corner row, so every
           "make this screen mine" entry point lives together */}
-      <button
-        onClick={(e) => {
-          if (customizeOpen) {
-            setCustomizeClosing(true)
-            return
-          }
-          const r = e.currentTarget.getBoundingClientRect()
-          setCustomizePos({ x: r.left, y: r.bottom + 8 })
-          setCustomizeOpen(true)
-        }}
-        aria-label="Customize layout"
-        title="Customize layout"
-        className={`absolute right-36 top-14 z-[85] grid h-10 w-10 place-items-center rounded-full text-black transition-transform duration-150 hover:scale-105 active:scale-95 ${
-          customizeOpen ? 'ring-2 ring-emerald-300/70 ring-offset-2 ring-offset-black' : ''
-        }`}
-        style={{
-          background: 'linear-gradient(145deg,#f4f7fa 0%,#c7ccd4 40%,#9aa2ac 70%,#e8ecf1 100%)',
-          boxShadow:
-            'inset 0 1px 1px rgba(255,255,255,0.9), inset 0 -1px 2px rgba(0,0,0,0.25), 0 4px 14px rgba(0,0,0,0.55)',
-        }}
+      <DraggableSurface
+        id="btn-customize"
+        editing={isEditingLayout}
+        offset={chromeLayout.offsets['btn-customize']}
+        onOffset={chromeLayout.setOffset}
       >
-        <SlidersHorizontal size={15} strokeWidth={2} />
-      </button>
+        <button
+          onClick={(e) => {
+            if (customizeOpen) {
+              setCustomizeClosing(true)
+              return
+            }
+            const r = e.currentTarget.getBoundingClientRect()
+            setCustomizePos({ x: r.left, y: r.bottom + 8 })
+            setCustomizeOpen(true)
+          }}
+          data-liquid-ignore
+          aria-label="Customize layout"
+          title="Customize layout"
+          className={`absolute right-36 top-14 z-[85] grid h-10 w-10 place-items-center rounded-full text-black transition-transform duration-150 hover:scale-105 active:scale-95 ${
+            customizeOpen ? 'ring-2 ring-emerald-300/70 ring-offset-2 ring-offset-black' : ''
+          }`}
+          style={{
+            background: 'linear-gradient(145deg,#f4f7fa 0%,#c7ccd4 40%,#9aa2ac 70%,#e8ecf1 100%)',
+            boxShadow:
+              'inset 0 1px 1px rgba(255,255,255,0.9), inset 0 -1px 2px rgba(0,0,0,0.25), 0 4px 14px rgba(0,0,0,0.55)',
+          }}
+        >
+          <SlidersHorizontal size={15} strokeWidth={2} />
+        </button>
+      </DraggableSurface>
 
-      {/* the Dannify extension — the button sits beside the playlist one, in
-          the same corner, so the two ways of finding music are together */}
-      <button
-        onClick={() => setDannifyOpen(true)}
-        aria-label="Open Dannify"
-        title="Open Dannify"
-        className="absolute right-20 top-14 z-[85] grid h-10 w-10 place-items-center rounded-full text-black transition-transform duration-150 hover:scale-105 active:scale-95"
-        style={{
-          background: 'linear-gradient(145deg,#f4f7fa 0%,#c7ccd4 40%,#9aa2ac 70%,#e8ecf1 100%)',
-          boxShadow:
-            'inset 0 1px 1px rgba(255,255,255,0.9), inset 0 -1px 2px rgba(0,0,0,0.25), 0 4px 14px rgba(0,0,0,0.55)',
-        }}
+      {/* the extension hub — one button for everything added beside the
+          player. ONLINE (Dannify) is a row inside it, not a corner button of
+          its own, so more extensions never crowd the stage chrome. */}
+      <DraggableSurface
+        id="btn-extensions"
+        editing={isEditingLayout}
+        offset={chromeLayout.offsets['btn-extensions']}
+        onOffset={chromeLayout.setOffset}
       >
-        <Globe size={15} strokeWidth={2} />
-      </button>
+        <button
+          onClick={(e) => {
+            if (extensionOpen) {
+              setExtensionClosing(true)
+              return
+            }
+            const r = e.currentTarget.getBoundingClientRect()
+            setExtensionPos({ x: r.left, y: r.bottom + 8 })
+            setExtensionOpen(true)
+          }}
+          data-liquid-ignore
+          aria-label="Extensions"
+          title={extensionOpen ? 'Hide extensions' : 'Extensions'}
+          className={`absolute right-20 top-14 z-[85] grid h-10 w-10 place-items-center rounded-full text-black transition-transform duration-150 hover:scale-105 active:scale-95 ${
+            extensionOpen ? 'ring-2 ring-emerald-300/70 ring-offset-2 ring-offset-black' : ''
+          }`}
+          style={{
+            background: 'linear-gradient(145deg,#f4f7fa 0%,#c7ccd4 40%,#9aa2ac 70%,#e8ecf1 100%)',
+            boxShadow:
+              'inset 0 1px 1px rgba(255,255,255,0.9), inset 0 -1px 2px rgba(0,0,0,0.25), 0 4px 14px rgba(0,0,0,0.55)',
+          }}
+        >
+          <Puzzle size={15} strokeWidth={2} />
+        </button>
+      </DraggableSurface>
 
       {/* safe mode: three launches that never came up have parked the live
           wallpaper (see lib/safeMode) — say so, rather than leaving the
@@ -1998,50 +2515,9 @@ export default function Home() {
             lyrics.enabled ? 'lg:-translate-x-24' : ''
           }`}
         >
-          {/* the halo is part of the CD assembly — hiding the disc must take
-              it with it, or a floating glow is left orbiting nothing */}
-          {cdVisible && <ChromeVisualizerMemo getAnalyser={eng.getAnalyser} playing={eng.playing} />}
-          {cdVisible && (
-            /* brightness filters ONLY the CD — on the stage it also swallowed
-               the visualiser canvas, forcing the whole filtered layer to
-               re-raster every canvas frame (the CD's stutter source) */
-            <div
-              style={cdBrightness !== 100 ? { filter: `brightness(${cdBrightness / 100})` } : undefined}
-            >
-              <DiscCaseMemo
-                playing={eng.playing}
-                onToggle={togglePlayback}
-                onScratch={eng.seekBy}
-                cover={track.cover ?? null}
-                bpm={discBpm}
-                analyser={eng.getAnalyser}
-                reactive={cdReactive}
-                /* the disc face resolves in this order:
-                   1. the open playlist's poster — only while PLAYLIST COVER is on
-                   2. the playing track's cover — only while TRACK COVER is on
-                   3. the user's uploaded label (the default face)
-                   4. the pressed stock disc
-                   The upload is the DEFAULT, not a mode: it is what the disc
-                   wears whenever no cover/poster is available, and the two
-                   switches are what let a cover outrank it. */
-                discArt={activeDiscArt}
-                /* a track cover is unprinted photo stock — it needs the hub
-                   hole to read as a disc. The playlist poster and the
-                   uploaded label are printed faces and keep their own
-                   centres, as does the stock disc. */
-                hubHole={discArtSource === 'track'}
-                /* a real disc change, not just new pixels: beats on the track
-                   id so a shared cover still gets the exchange — but only
-                   when that cover is what's actually on the platter. A poster
-                   belongs to the playlist and the default/stock face is a
-                   fixture, so neither animates a "disc change". */
-                faceKey={track.id}
-                swapEnabled={discArtSource === 'track'}
-                speedScale={cdSpeed}
-                frosted={wall.theme === 'custom' && !!wall.wallpaper}
-              />
-            </div>
-          )}
+          {/* the disc — docked in the stage until the layout editor gives it
+              a rectangle of its own (md-disc-box) */}
+          {!discFramed && discAssembly}
 
           {/* lyrics — one of three positions.
 
@@ -2068,23 +2544,13 @@ export default function Home() {
               with a clock worth following. So the panel also opens for a
               detected radio song — otherwise a listener with an empty
               library would never see the highlight at all. */}
-          {lyrics.enabled && !lyricsFramed && (allTracks.length > 0 || radio.song) && (
-            <div
-              className={`lyrics-overlay pointer-events-none absolute inset-0 z-[60] flex items-center ${
-                lyricMode === 'disc-right' ? 'justify-end' : 'justify-start'
-              }`}
-            >
-              <div
-                className={`pointer-events-auto ${
-                  lyricMode === 'stage'
-                    ? 'h-[78%] w-[92%] px-4'
-                    : lyricMode === 'disc-right'
-                      ? 'h-[62%] w-[52%] pl-7 pr-[2%]'
-                      : 'h-[72%] w-[78%] pl-[9%] pr-2'
-                }`}
-              >
-                {lyricsPanel}
-              </div>
+          {/* with the CD hidden there is no disc to carry the words, so the
+              stage box takes over. On/beside-disc words now live inside the
+              disc assembly (see discLyricsOverlay), which is what keeps them
+              attached when the disc itself is moved. */}
+          {lyrics.enabled && !lyricsFramed && lyricMode === 'stage' && (allTracks.length > 0 || radio.song) && (
+            <div className="lyrics-overlay pointer-events-none absolute inset-0 z-[60] flex items-center justify-start">
+              <div className="pointer-events-auto h-[78%] w-[92%] px-4">{lyricsPanel}</div>
             </div>
           )}
         </div>
@@ -2096,106 +2562,26 @@ export default function Home() {
             height depend on how many rows were mounted, which fed straight
             back into the windowing and looped. */}
         <div className="flex min-h-0 w-full max-w-md flex-1 flex-col lg:w-[368px] lg:flex-none lg:self-stretch">
-          {/* now playing */}
-          <div className="mb-1 flex items-center gap-2 font-mono text-[10px] tracking-[0.3em] text-emerald-300/70">
-            <span>
-              TRACK {activeVisibleIndex >= 0 ? String(activeVisibleIndex + 1).padStart(2, '0') : '--'}/
-              {String(visibleTracks.length).padStart(2, '0')} — {track.genre}
-            </span>
-            {/* genuine buffering only — local tracks start immediately */}
-            {eng.busy && (
-              <span className="animate-pulse text-[8px] tracking-[0.2em] text-amber-300">BUFFERING…</span>
-            )}
-            {eng.failed && !eng.busy && <span className="text-[8px] tracking-[0.2em] text-rose-300">{eng.failed}</span>}
-          </div>
-          {/* now playing — single-line ticker: long titles never shift the layout */}
-          <div
-            ref={titleWrapRef}
-            className="mb-4 overflow-hidden [mask-image:linear-gradient(90deg,transparent,black_6%,black_94%,transparent)]"
-          >
-            <h1
-              key={track.id}
-              className={`fade-in inline-block whitespace-nowrap text-4xl font-bold leading-none tracking-tight will-change-transform`}
-              style={{
-                fontFamily: 'Space Grotesk, sans-serif',
-                background: 'linear-gradient(120deg,#fff 20%,#9db8ff 45%,#ffb3e2 65%,#fff 90%)',
-                WebkitBackgroundClip: 'text',
-                backgroundClip: 'text',
-                color: 'transparent',
-              }}
-            >
-              <span>
-                {track.title}
-                <span className="mx-2 select-none opacity-40">✦</span>
-              </span>
-              {titleOverflows && (
-                <span aria-hidden="true">
-                  {track.title}
-                  <span className="mx-2 select-none opacity-40">✦</span>
-                </span>
-              )}
-            </h1>
+          {/* the old buffering/failure strip is GONE — nothing renders in
+              that space, not even an empty container */}
+
+          {/* the carousel sits above the player controls; in edit mode it
+              becomes a free rectangle (see carouselFramed). The slot itself
+              stays reserved so the player does not jump up under the frame. */}
+          <div ref={carouselPanelRef} className="mb-3 h-[176px] w-full shrink-0">
+            {!carouselFramed && carouselWidget}
           </div>
 
-          {/* correct the track info — lyrics matching is metadata-bound, and
-              imported files routinely arrive with no (or wrong) ID3 tags.
-              The same row carries the favourite toggle for the playing song. */}
-          {allTracks.length > 0 && track.id >= 0 && (
-            <div className="mb-4 flex items-center gap-2">
-              <button
-                onClick={(e) => openMetaEdit(eng.trackIndex, e.currentTarget.getBoundingClientRect())}
-                title="Edit title / artist"
-                aria-label="Edit title and artist"
-                className="flex items-center gap-1.5 rounded-full border border-white/15 px-2.5 py-1.5 font-mono text-[8px] tracking-[0.2em] text-white/40 transition hover:border-white/40 hover:text-white"
-              >
-                <Pencil size={10} />
-                EDIT INFO
-              </button>
-              <button
-                onClick={() => toggleFavourite(track.id)}
-                title={isFavourite(track.id) ? 'Remove from favourites' : 'Add to favourites'}
-                aria-label={isFavourite(track.id) ? 'Remove from favourites' : 'Add to favourites'}
-                aria-pressed={isFavourite(track.id)}
-                className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1.5 font-mono text-[8px] tracking-[0.2em] transition ${
-                  isFavourite(track.id)
-                    ? 'border-rose-300/50 bg-rose-400/10 text-rose-200'
-                    : 'border-white/15 text-white/40 hover:border-white/40 hover:text-white'
-                }`}
-              >
-                <Heart size={10} className={isFavourite(track.id) ? 'fill-rose-300' : ''} />
-                {isFavourite(track.id) ? 'FAVOURITED' : 'FAVOURITE'}
-              </button>
+          {!musicFramed && (
+            <div ref={musicPanelRef}>
+              {controlPanel}
             </div>
           )}
 
-          <Transport
-            playing={eng.playing}
-            subscribeTime={eng.subscribeTime}
-            duration={eng.duration}
-            shuffle={eng.shuffle}
-            repeat={eng.repeat}
-            volume={eng.volume}
-            onPrev={() => stepVisible(-1)}
-            onNext={() => stepVisible(1)}
-            onToggle={togglePlayback}
-            onToggleShuffle={() => eng.setShuffle((s) => !s)}
-            onCycleRepeat={eng.cycleRepeat}
-            onSetVolume={eng.setVolume}
-            onSeekTo={eng.seekTo}
-          />
-
-          {/* playlist — takes whatever height the deck has left, so the
-              document stays exactly one screen tall no matter how many
-              tracks are in it. While the tracklist owns a saved rectangle
-              (or is being edited) it lives in its LayoutFrame at the top of
-              the tree instead, so this dock only exists while it is docked.
-              The wrapper is what a first-ever edit measures — its rect
-              becomes the starting box. */}
-          {!tracklistFramed && (
-            <div ref={tracklistPanelRef} className="flex min-h-0 flex-1 flex-col">
-              {tracklistPanel}
-            </div>
-          )}
+          {/* the old tracklist dock — the queue panel is the single surface
+              now, so this wrapper only holds the preserved (hidden) panel.
+              Kept mounted for an easy rollback, per the standing note. */}
+          <div className="flex min-h-0 flex-1 flex-col">{tracklistPanel}</div>
         </div>
       </main>
 
@@ -2205,6 +2591,9 @@ export default function Home() {
         <TrackMetaEditor
           track={allTracks[metaEdit.index]}
           anchor={metaEdit.anchor}
+          editing={isEditingLayout}
+          offset={chromeLayout.offsets['panel-meta']}
+          onOffset={(o) => chromeLayout.setOffset('panel-meta', o)}
           onClose={closeMetaEdit}
           onSave={(title, artist, cover) => {
             const target = allTracks[metaEdit.index]
@@ -2213,65 +2602,16 @@ export default function Home() {
         />
       )}
 
-      {/* cd settings + radio (bottom left) */}
-      <div className="fixed bottom-[13%] left-[5%] z-[86] flex items-center gap-2">
-        {/* radio is opened by a HOLD, not a click: the panel is a destination
-            (browse, search, tune in) rather than a quick toggle, and a stray
-            click must never yank the output away from the library */}
-        <button
-          aria-label="Radio (hold)"
-          title="Radio — hold to open"
-          onPointerDown={() => {
-            holdTimerRef.current = window.setTimeout(() => {
-              holdTimerRef.current = 0
-              heldRef.current = true
-              setRadioOpen(true)
-            }, 450)
-          }}
-          onPointerUp={() => {
-            if (holdTimerRef.current) window.clearTimeout(holdTimerRef.current)
-            holdTimerRef.current = 0
-          }}
-          onPointerLeave={() => {
-            if (holdTimerRef.current) window.clearTimeout(holdTimerRef.current)
-            holdTimerRef.current = 0
-          }}
-          className={`relative grid h-8 w-8 place-items-center rounded-full transition-all duration-150 hover:scale-105 ${
-            radioOpen || radio.current
-              ? 'bg-white/90 text-black'
-              : 'border border-white/15 bg-black/60 text-white/50 hover:border-white/40 hover:text-white'
-          }`}
-        >
-          <Radio size={13} />
-          {(radio.playing || radio.connecting) && (
-            <span className="absolute -right-0.5 -top-0.5 h-2 w-2 animate-blink rounded-full bg-red-500" />
-          )}
-        </button>
-        {/* the visualiser panel is opened from its circle in the header —
-            no second button down here */}
-        <button
-          aria-label="CD settings"
-          title="CD settings"
-          onClick={toggleCdSettings}
-          className={`grid h-8 w-8 place-items-center rounded-full transition-all duration-150 hover:scale-105 ${
-            cdSettingsOpen ? 'text-black' : 'text-white/50 hover:text-white'
-          }`}
-          style={
-            cdSettingsOpen
-              ? {
-                  background: 'linear-gradient(145deg,#f4f7fa 0%,#c7ccd4 40%,#9aa2ac 70%,#e8ecf1 100%)',
-                  boxShadow: 'inset 0 1px 1px rgba(255,255,255,0.9), 0 3px 10px rgba(0,0,0,0.5)',
-                }
-              : { boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.12)' }
-          }
-        >
-          <SlidersHorizontal size={12} />
-        </button>
-      </div>
+      {/* cd settings + radio toggles now live INSIDE the player panel's
+          transport row, so they scale with it in the layout editor — nothing
+          floats on the stage for them any more */}
 
       {cdSettingsOpen && (
         <CdSettingsPanel
           cdVisible={cdVisible}
+          editing={isEditingLayout}
+          offset={chromeLayout.offsets['panel-cd']}
+          onOffset={(o) => chromeLayout.setOffset('panel-cd', o)}
           onCdVisible={setCdVisible}
           cdBrightness={cdBrightness}
           onCdBrightness={setCdBrightness}
@@ -2302,6 +2642,12 @@ export default function Home() {
 
       {/* fullscreen (bottom center) + creator (bottom right) */}
       <div className="pointer-events-none absolute bottom-12 left-1/2 z-40 -translate-x-1/2">
+        <DraggableSurface
+          id="btn-fullscreen"
+          editing={isEditingLayout}
+          offset={chromeLayout.offsets['btn-fullscreen']}
+          onOffset={chromeLayout.setOffset}
+        >
         <button
           onClick={toggleFullscreen}
           className="pointer-events-auto flex items-center gap-2 rounded-full px-4 py-2 font-mono text-[9px] tracking-[0.25em] text-black transition-transform duration-150 hover:scale-105 active:scale-95"
@@ -2313,6 +2659,7 @@ export default function Home() {
           {isFullscreen ? <Minimize size={12} strokeWidth={2.5} /> : <Maximize size={12} strokeWidth={2.5} />}
           {isFullscreen ? 'EXIT FULLSCREEN' : 'FULLSCREEN'}
         </button>
+        </DraggableSurface>
       </div>
       <div className="fixed bottom-[13%] right-[5%] z-[86]">
         {wall.wallBusy != null && (
@@ -2343,24 +2690,14 @@ export default function Home() {
           </div>
         )}
         <div className="flex items-center justify-end gap-2">
-          <button
-            aria-label="Wallpaper settings"
-            title="Wallpaper settings"
-            onClick={wall.toggleWallSettings}
-            className={`grid h-8 w-8 place-items-center rounded-full transition-all duration-150 hover:scale-105 ${
-              wall.wallSettingsOpen ? 'text-black' : 'text-white/50 hover:text-white'
-            }`}
-            style={
-              wall.wallSettingsOpen
-                ? {
-                    background: 'linear-gradient(145deg,#f4f7fa 0%,#c7ccd4 40%,#9aa2ac 70%,#e8ecf1 100%)',
-                    boxShadow: 'inset 0 1px 1px rgba(255,255,255,0.9), 0 3px 10px rgba(0,0,0,0.5)',
-                  }
-                : { boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.12)' }
-            }
+          {/* the wallpaper settings toggle lives in the player panel's
+              transport row now; only the status pills + CREATOR stay here */}
+          <DraggableSurface
+            id="btn-creator"
+            editing={isEditingLayout}
+            offset={chromeLayout.offsets['btn-creator']}
+            onOffset={chromeLayout.setOffset}
           >
-            <SlidersHorizontal size={12} />
-          </button>
           <button
             onClick={toggleCreator}
             className={`flex items-center gap-2 rounded-full px-4 py-2 font-mono text-[9px] tracking-[0.25em] text-black transition-transform duration-150 hover:scale-105 active:scale-95 ${
@@ -2373,12 +2710,16 @@ export default function Home() {
           >
             CREATOR
           </button>
+          </DraggableSurface>
+          </div>
         </div>
-      </div>
 
       {radioOpen && (
         <RadioPanel
           known={radio.known}
+          editing={isEditingLayout}
+          offset={chromeLayout.offsets['panel-radio']}
+          onOffset={(o) => chromeLayout.setOffset('panel-radio', o)}
           addAll={radio.addAll}
           onAddAll={radio.setAddAll}
           favourites={radio.favourites}
@@ -2414,6 +2755,9 @@ export default function Home() {
       {visualizerOpen && (
         <VisualizerPanel
           audioState={visualizer.audioState}
+          editing={isEditingLayout}
+          offset={chromeLayout.offsets['panel-visualizer']}
+          onOffset={(o) => chromeLayout.setOffset('panel-visualizer', o)}
           volt={volt.style}
           onVolt={volt.setStyle}
           settings={volt.settings}
@@ -2435,17 +2779,56 @@ export default function Home() {
           coordinates would land somewhere else entirely. Independent of
           cdVisible on purpose: editing works with the CD on or off. */}
       {lyrics.enabled && lyricsFramed && (allTracks.length > 0 || radio.song) && (
-        <LayoutFrame box={lyricBox} onCommit={commitLyricBox} editing={editLyrics}>
+        <LayoutFrame box={lyricBox} onCommit={commitLyricBox} editing={isEditingLayout}>
           {lyricsPanel}
         </LayoutFrame>
       )}
 
-      {/* the custom tracklist — the same editor, same chrome, same rules.
-          While a rectangle is saved the panel lives here instead of the deck
-          column; RESET (in the Customize panel) docks it back. */}
-      {tracklistFramed && (
-        <LayoutFrame box={tlLayout.box} onCommit={tlLayout.setBox} editing={editTracklist} seed={tlSeed}>
-          {tracklistPanel}
+      {/* the old custom tracklist frame is GONE — the queue panel replaced it.
+          Its layout box was the orphaned dotted rectangle edit mode kept
+          drawing in the middle of the screen. */}
+
+      {/* the custom player panel — same editor, same rules; the deck column
+          drops its docked copy while this is live (musicFramed gates both). */}
+      {musicFramed && (
+        <LayoutFrame box={musicLayout.box} onCommit={musicSetBox} editing={isEditingLayout} seed={musicSeed}>
+          {controlPanel}
+        </LayoutFrame>
+      )}
+
+      {/* the carousel's own rectangle once it has been arranged. UNBOUNDED:
+          no arbitrary min/max — the songs widget may be scaled freely. */}
+      {carouselFramed && (
+        <LayoutFrame
+          box={carouselBox}
+          onCommit={carouselSetBox}
+          editing={isEditingLayout}
+          seed={carouselSeed}
+          unbounded
+        >
+          <div className="h-full w-full">{carouselWidget}</div>
+        </LayoutFrame>
+      )}
+
+      {/* the disc's own layout rectangle. The wrapper keeps the disc square as
+          the frame is resized (container units), and gives edit mode a clear
+          drag surface instead of letting the disc swallow the gesture. */}
+      {discFramed && discAssembly && (
+        <LayoutFrame box={discBox} onCommit={discSetBox} editing={isEditingLayout} seed={discSeed}>
+          <div
+            style={{
+              containerType: 'size',
+              width: '100%',
+              height: '100%',
+              display: 'grid',
+              placeItems: 'center',
+            }}
+            className={isEditingLayout ? 'pointer-events-none' : undefined}
+          >
+            <div style={{ width: 'min(100cqw, 100cqh)', height: 'min(100cqw, 100cqh)' }}>
+              {discAssembly}
+            </div>
+          </div>
         </LayoutFrame>
       )}
 
@@ -2454,21 +2837,29 @@ export default function Home() {
           what this saves is the decision to stop, which is what takes the
           dashed borders and handles down. */}
       {isEditingLayout && (
-        <button
-          onClick={saveLayout}
-          className="settings-panel fx-blur fixed bottom-24 left-1/2 z-[95] flex -translate-x-1/2 items-center gap-2 rounded-full border border-emerald-300/50 bg-black/85 px-5 py-2 font-mono text-[9px] tracking-[0.25em] text-emerald-200 backdrop-blur-md transition hover:bg-emerald-400/15"
+        <DraggableSurface
+          id="btn-save-layout"
+          editing={isEditingLayout}
+          offset={chromeLayout.offsets['btn-save-layout']}
+          onOffset={chromeLayout.setOffset}
         >
-          <Check size={12} />
-          SAVE LAYOUT
-        </button>
+          <button
+            onClick={saveLayout}
+            className="settings-panel fx-blur fixed bottom-24 left-1/2 z-[95] flex -translate-x-1/2 items-center gap-2 rounded-full border border-emerald-300/50 bg-black/85 px-5 py-2 font-mono text-[9px] tracking-[0.25em] text-emerald-200 backdrop-blur-md transition hover:bg-emerald-400/15"
+          >
+            <Check size={12} />
+            SAVE LAYOUT
+          </button>
+        </DraggableSurface>
       )}
 
       {/* lyrics settings — closes itself with the panel it configures */}
       {lyrics.enabled && lyricsSettingsOpen && (
         <LyricsSettingsPanel
           api={lyricsApiRef.current}
-          mode={lyricMode}
-          onMode={lyrics.setAlign}
+          chromeEditing={isEditingLayout}
+          layoutOffset={chromeLayout.offsets['panel-lyrics-settings']}
+          onLayoutOffset={(o) => chromeLayout.setOffset('panel-lyrics-settings', o)}
           size={lyrics.size}
           onSize={lyrics.setSize}
           brightness={lyrics.brightness}
@@ -2531,6 +2922,9 @@ export default function Home() {
       {wall.wallSettingsOpen && wall.wallBusy == null && (
         <WallpaperSettingsPanel
           pendingWallFile={wall.pendingWallFile}
+          editing={isEditingLayout}
+          offset={chromeLayout.offsets['panel-wall']}
+          onOffset={(o) => chromeLayout.setOffset('panel-wall', o)}
           wallQuality={wall.wallQuality}
           onPickQuality={wall.pickQuality}
           wallFpsTarget={wall.wallFpsTarget}
@@ -2560,7 +2954,28 @@ export default function Home() {
         />
       )}
 
-      {creatorOpen && <CreatorMenu closing={creatorClosing} onClosed={onCreatorClosed} />}
+      {creatorOpen && (
+        <CreatorMenu
+          closing={creatorClosing}
+          onClosed={onCreatorClosed}
+          editing={isEditingLayout}
+          offset={chromeLayout.offsets['panel-creator']}
+          onOffset={(o) => chromeLayout.setOffset('panel-creator', o)}
+        />
+      )}
+
+      {/* player settings — the switches playback honours, back on the main
+          screen now that the queue panel stopped hosting them */}
+      {psOpen && (
+        <PlayerSettingsPanel
+          settings={playerSettings}
+          onSetting={playerSetting}
+          accentArt={accentArt}
+          onAccentArt={setAccentArt}
+          onClose={() => setPsOpen(false)}
+          pos={psPos}
+        />
+      )}
 
       {/* the customize hub — layout editing for every movable panel. Its
           toggles START edit sessions; the floating SAVE LAYOUT button ends
@@ -2568,14 +2983,23 @@ export default function Home() {
       {customizeOpen && (
         <CustomizePanel
           cdVisible={cdVisible}
+          editing={isEditingLayout}
+          offset={chromeLayout.offsets['panel-customize']}
+          onOffset={(o) => chromeLayout.setOffset('panel-customize', o)}
+          editChrome={editChrome}
+          onEditChrome={enterLayoutEdit}
+          chromeEdited={Object.keys(chromeLayout.offsets).length > 0}
+          onResetChrome={chromeLayout.reset}
           lyricsCustom={lyrics.custom}
           onLyricsCustom={lyrics.setCustom}
-          editLyrics={editLyrics}
-          onEditLyrics={enterLyricsEdit}
-          editTracklist={editTracklist}
-          onEditTracklist={enterTracklistEdit}
-          tracklistSaved={!!tlLayout.box}
-          onResetTracklist={resetTracklist}
+          queueSaved={!!queueBox}
+          onResetQueue={resetQueueLayout}
+          musicSaved={!!musicLayout.box}
+          onResetMusic={resetMusicLayout}
+          discSaved={!!discBox}
+          onResetDisc={resetDiscLayout}
+          carouselSaved={!!carouselBox}
+          onResetCarousel={resetCarouselLayout}
           lyricsEnabled={lyrics.enabled}
           onClose={() => setCustomizeClosing(true)}
           closing={customizeClosing}
@@ -2583,6 +3007,26 @@ export default function Home() {
           onClosed={() => {
             setCustomizeOpen(false)
             setCustomizeClosing(false)
+          }}
+        />
+      )}
+
+      {/* the extension hub — every extension gets its entry point here */}
+      {extensionOpen && (
+        <ExtensionPanel
+          pos={extensionPos}
+          editing={isEditingLayout}
+          offset={chromeLayout.offsets['panel-extension']}
+          onOffset={(o) => chromeLayout.setOffset('panel-extension', o)}
+          onOpenOnline={() => {
+            setExtensionClosing(true)
+            setDannifyOpen(true)
+          }}
+          onClose={() => setExtensionClosing(true)}
+          closing={extensionClosing}
+          onClosed={() => {
+            setExtensionOpen(false)
+            setExtensionClosing(false)
           }}
         />
       )}
@@ -2603,46 +3047,27 @@ export default function Home() {
         />
       )}
 
-<PlaylistDrawer
-        open={playlistOpen}
-        folders={playlists.folders}
-        library={playlist.tracks}
-        currentIndex={eng.trackIndex}
-        playing={eng.playing}
-        playerSettings={{ crossfade: eng.crossfade, crossfadeSec: eng.crossfadeSec, normalize: eng.normalize }}
-        onPlayerSetting={(key, value) => {
-          if (key === 'crossfade') eng.setCrossfade(!!value)
-          else if (key === 'crossfadeSec') eng.setCrossfadeSec(Number(value))
-          else eng.setNormalize(!!value)
-        }}
-        accentArt={accentArt}
-        onAccentArt={setAccentArt}
-        onClose={() => setPlaylistOpen(false)}
-        selectedFolderId={selectedFolderId}
-        onSelectFolder={selectFolder}
-        onCreateFolder={playlists.createFolder}
-        onRestoreFolder={playlists.restoreFolder}
-        onDuplicateFolder={playlists.duplicateFolder}
-        onRenameFolder={playlists.renameFolder}
-        onDeleteFolder={deleteFolder}
-        onSetFolderImage={playlists.setFolderImage}
-        onAddTrack={playlists.addTrackToFolder}
-        onRemoveTrack={removeFolderTrack}
-        onReorder={playlists.reorderTracks}
-        onPlayTrack={playFolderTrack}
-        onPlayAll={playAll}
-        onEditTrack={(id, title, artist, cover) => {
-          void playlist.renameTrack(id, title, artist, cover)
-        }}
-        onUploadFile={uploadToFolder}
-        isFavourite={isFavourite}
-        onToggleFavourite={toggleFavourite}
-        isNextUp={isNextUp}
-        onToggleNext={toggleNextUp}
-      />
+      {/* the unified queue + playlists hub. It replaces the tracklist panel
+          and the old drawer: both stay mounted but hidden below, in case a
+          session needs to fall back to them. Docked at a screen edge in the
+          standard layout; hosted by the layout editor's frame once the global
+          edit mode (or a saved rectangle) owns it. */}
+      {queueFramed ? (
+        <LayoutFrame box={queueBox} onCommit={queueSetBox} editing={isEditingLayout} seed={queueSeed}>
+          {queuePanelEl}
+        </LayoutFrame>
+      ) : (
+        queuePanelEl
+      )}
 
       {/* footer marquee */}
-      <footer className="marquee-fade relative z-40 overflow-hidden border-t border-white/10 py-2">
+      <DraggableSurface
+        id="footer"
+        editing={isEditingLayout}
+        offset={chromeLayout.offsets['footer']}
+        onOffset={chromeLayout.setOffset}
+      >
+        <footer className="marquee-fade relative z-40 overflow-hidden border-t border-white/10 py-2">
         <div className="animate-marquee flex w-max gap-8 font-mono text-[10px] tracking-[0.3em] text-white/40">
           {Array.from({ length: 6 }).map((_, i) => (
             <span key={i} className="whitespace-nowrap">
@@ -2650,7 +3075,8 @@ export default function Home() {
             </span>
           ))}
         </div>
-      </footer>
+        </footer>
+      </DraggableSurface>
     </div>
   )
 }

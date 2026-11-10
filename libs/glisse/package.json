@@ -1,0 +1,75 @@
+{
+  "name": "glisse",
+  "version": "0.5.0",
+  "description": "A faithful implementation of Apple's Liquid Glass for the web.",
+  "keywords": [
+    "react",
+    "liquid glass",
+    "glass",
+    "ui",
+    "components",
+    "tab bar",
+    "segmented control",
+    "switch",
+    "slider",
+    "menu"
+  ],
+  "license": "MIT",
+  "author": "Kelvin Zhang <me@kelvinzhang.ca>",
+  "homepage": "https://glisse.kelvinzhang.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/0kzh/glisse.git"
+  },
+  "bugs": "https://github.com/0kzh/glisse/issues",
+  "type": "module",
+  "sideEffects": [
+    "*.css",
+    "./dist/index.js",
+    "./dist/index.cjs"
+  ],
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./styles.css": "./dist/styles.css",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
+  },
+  "peerDependencies": {
+    "react": ">=18",
+    "react-dom": ">=18"
+  },
+  "devDependencies": {
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/react": "^16.3.3",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "jsdom": "^29.1.1",
+    "lightningcss": "^1.33.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "tsdown": "^0.23.2",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}

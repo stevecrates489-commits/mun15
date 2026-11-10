@@ -15,13 +15,15 @@
 
 const TTML_HEAD = '<?xml version="1.0" encoding="UTF-8"?>\n<tt xmlns="http://www.w3.org/ns/ttml"><body><div>'
 const TTML_TAIL = '</div></body></tt>'
+export { TTML_HEAD, TTML_TAIL }
 
 /* [mm:ss.xx] / [mm:ss:xx] — one line may carry several, meaning it repeats */
 const LRC_TAG = /\[(\d{1,2}):(\d{1,2}(?:[.:]\d{1,3})?)\]/g
 /* metadata lines that must not become lyrics */
 const LRC_META = /^\s*\[(ti|ar|al|au|by|re|offset|length|ve|id)\s*:/i
 
-const escapeXml = (s: string) =>
+/** a literal string, safe inside an XML document — QRC and Unison hand-offs use it */
+export const escapeXml = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
 const lrcToSeconds = (m: string, s: string) => Number(m) * 60 + Number(s.replace(':', '.'))
@@ -30,6 +32,7 @@ export const isTtml = (text: string) => /<tt[\s>]/i.test(text)
 
 /** `12.5` → `"12.500s"`, a form the component's TTML time parser accepts */
 const secs = (ms: number) => `${(ms / 1000).toFixed(3)}s`
+export { secs }
 
 interface Entry {
   begin?: number

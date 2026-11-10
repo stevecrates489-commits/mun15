@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import CreatorEye from './CreatorEye'
+import { useChromeDrag, type ChromeOffset } from '../features/layout/useChromeDrag'
 
 const ICONS = {
   telegram:
@@ -43,10 +44,18 @@ function arcSegment(a0: number, a1: number, slant = 0): string {
 export default function CreatorMenu({
   closing,
   onClosed,
+  editing = false,
+  offset,
+  onOffset,
 }: {
   closing: boolean
   onClosed: () => void
+  /** layout editor — drag the ring while an edit session runs */
+  editing?: boolean
+  offset?: ChromeOffset
+  onOffset?: (o: ChromeOffset) => void
 }) {
+  const drag = useChromeDrag({ editing, offset, onOffset })
   useEffect(() => {
     if (!closing) return
     const t = window.setTimeout(onClosed, 320)
@@ -55,7 +64,12 @@ export default function CreatorMenu({
 
   return (
     <>
-      <div className="fixed z-[90]" style={{ right: 'calc(5% - 53px)', bottom: 'calc(13% + 50px)' }}>
+      <div
+        className={`fixed z-[90] ${drag.editClass}`}
+        style={{ right: 'calc(5% - 53px)', bottom: 'calc(13% + 50px)', ...drag.style }}
+        onPointerDownCapture={drag.onPointerDown}
+        onClickCapture={drag.onClickCapture}
+      >
         <div className={`relative ${closing ? 'creator-closing' : ''}`} style={{ width: 200, height: 200 }}>
           <svg
             viewBox="0 0 400 400"

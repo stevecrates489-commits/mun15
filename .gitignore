@@ -26,3 +26,15 @@ __pycache__/
 # .verify screenshots — the driver scripts are tracked, the images are not
 **/.verify/*.png
 **/.verify/*.jpg
+**/.verify/shots/
+
+# .verify scratch run logs — same rule as the images
+**/.verify/*.log
+
+# scratch screenshots parked at the app root between sessions
+3D\ Music\ Player\ with\ CD\ Animation/app/nextprev-*.png
+3D\ Music\ Player\ with\ CD\ Animation/app/queuefix-*.png
+
+# liquidGL reference clone — 203 MB (its own .git plus vendored media assets);
+# the app depends on `liquid-gl` from npm, this copy is reference material only
+libs/liquidGL/

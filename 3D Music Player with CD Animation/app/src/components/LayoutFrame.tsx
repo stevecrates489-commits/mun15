@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { clampBox, type LayoutBox } from '../features/layout/useLayoutBox'
+import { clampBox, clampLoose, type LayoutBox } from '../features/layout/useLayoutBox'
 
 /**
  * The layout-editor frame: wraps a panel (the lyrics, the tracklist) in a
@@ -87,14 +87,18 @@ interface Props {
      mode was requested (before the panel left its flow position) — used as
      the starting box when nothing was saved yet */
   seed?: LayoutBox | null
+  /* no arbitrary min/max on the resize: the panel may be scaled freely
+     (the carousel). Movement stays viewport-clamped. */
+  unbounded?: boolean
   children: React.ReactNode
 }
 
-export default function LayoutFrame({ box, onCommit, editing, seed = null, children }: Props) {
+export default function LayoutFrame({ box, onCommit, editing, seed = null, unbounded = false, children }: Props) {
   /* `live` holds the in-flight rectangle during a gesture so the frame moves
      with the pointer at full frame rate; outside a gesture the persisted box
      is the truth. The committed box is always CLAMPED for display — if the
-     window shrank since it was saved, the panel shows inside it. */
+     window shrank since it was saved, the panel shows inside it. Unbounded
+     panels clamp loosely instead (no size ceiling). */
   const [live, setLive] = useState<LayoutBox | null>(null)
   /* mirrored so the pointerup handler can read the last rectangle without
      reaching into a setState updater (updaters must stay pure) */
@@ -105,7 +109,15 @@ export default function LayoutFrame({ box, onCommit, editing, seed = null, child
     commitRef.current = onCommit
   }, [onCommit])
 
-  const shown = live ?? clampBox(box ?? defaultBox())
+  const clamp = unbounded ? clampLoose : clampBox
+  /* the gesture effect binds its listeners once for the frame's whole life;
+     the ref keeps the current clamp reachable from that first closure */
+  const clampRef = useRef(clamp)
+  useEffect(() => {
+    clampRef.current = clamp
+  }, [clamp])
+
+  const shown = live ?? clamp(box ?? defaultBox())
 
   /* seed the store once, so the very first reload after a save restores the
      same rectangle the user saw (and "saved position" is true from day one).
@@ -113,7 +125,8 @@ export default function LayoutFrame({ box, onCommit, editing, seed = null, child
      the seed is by passing the measured rectangle (or nothing, for lyrics). */
   useEffect(() => {
     if (box) return
-    commitRef.current(clampBox(seed ?? defaultBox()))
+    commitRef.current(clamp(seed ?? defaultBox()))
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- clamp follows the stable `unbounded` prop
   }, [box, seed])
 
   /* one pair of window listeners for the whole life of the frame. Gestures
@@ -132,14 +145,15 @@ export default function LayoutFrame({ box, onCommit, editing, seed = null, child
           if (Math.hypot(dx, dy) < DRAG_THRESHOLD) return
           g.started = true
         }
-        const next = clampBox({ ...g.start, x: g.start.x + dx, y: g.start.y + dy })
+        const next = clampRef.current({ ...g.start, x: g.start.x + dx, y: g.start.y + dy })
         liveRef.current = next
         setLive(next)
         return
       }
       /* resize — n/w pull the top/left edge (which moves the origin), the
          rest push the far edge; the clamp keeps it on-screen and above the
-         minimum, even when an edge is dragged past itself */
+         minimum, even when an edge is dragged past itself (loosely, for
+         unbounded panels) */
       const dir = g.dir ?? 'se'
       let { x, y, w, h } = g.start
       if (dir.includes('e')) w = g.start.w + dx
@@ -152,7 +166,7 @@ export default function LayoutFrame({ box, onCommit, editing, seed = null, child
         h = g.start.h - dy
         y = g.start.y + dy
       }
-      const next = clampBox({ x, y, w, h })
+      const next = clampRef.current({ x, y, w, h })
       liveRef.current = next
       setLive(next)
     }

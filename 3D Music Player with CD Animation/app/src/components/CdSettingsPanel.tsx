@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { X, ImagePlus, Trash2, Disc3, Check } from 'lucide-react'
+import { useChromeDrag, type ChromeOffset } from '../features/layout/useChromeDrag'
 
 /* CD settings card (bottom-left): disc art, spin speed, shortcuts,
    visibility, CD brightness.
@@ -33,6 +34,9 @@ export default function CdSettingsPanel({
   onClose,
   closing = false,
   onClosed,
+  editing = false,
+  offset,
+  onOffset,
 }: {
   cdVisible: boolean
   onCdVisible: (visible: boolean) => void
@@ -65,7 +69,12 @@ export default function CdSettingsPanel({
   onClose: () => void
   closing?: boolean
   onClosed?: () => void
+  /** layout editor — drag this panel while an edit session runs */
+  editing?: boolean
+  offset?: ChromeOffset
+  onOffset?: (o: ChromeOffset) => void
 }) {
+  const drag = useChromeDrag({ editing, offset, onOffset })
   useEffect(() => {
     if (!closing || !onClosed) return
     const t = window.setTimeout(onClosed, 200)
@@ -124,7 +133,10 @@ export default function CdSettingsPanel({
        bottom, so with enough faces in the collection its top would run off
        the screen instead of scrolling */
     <div
-      className={`settings-panel fx-blur fixed bottom-[calc(13%+46px)] left-[5%] z-[87] max-h-[calc(100vh-180px)] w-64 overflow-y-auto overscroll-contain rounded-2xl border border-white/15 bg-black/85 p-4 backdrop-blur-md${closing ? ' is-closing' : ''}`}
+      className={`settings-panel panel-resizable fx-blur fixed top-[34%] left-[5%] z-[87] max-h-[calc(100vh-180px)] w-64 overflow-y-auto overscroll-contain rounded-2xl border border-white/15 bg-black/85 p-4 backdrop-blur-md${closing ? ' is-closing' : ''} ${drag.editClass}`}
+      style={drag.style}
+      onPointerDownCapture={drag.onPointerDown}
+      onClickCapture={drag.onClickCapture}
     >
       <div className="mb-3 flex items-center justify-between">
         <span className="font-mono text-[9px] tracking-[0.25em] text-white/50">CD SETTINGS</span>

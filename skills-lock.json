@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "skills": {
+    "apple-design": {
+      "source": "dickwu/apple-design-skill",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "a35331c049004f3408e6591ea2f3013cebc8cd7eb673e7713ded8db86b373bc4"
+    },
+    "capture-component-posters": {
+      "source": "educlopez/smoothui",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/capture-component-posters/SKILL.md",
+      "computedHash": "7816a47eada596bf848a0224565fce2b54bfb4bb51031d94c120283d90a1d0b7"
+    },
+    "design-taste-frontend": {
+      "source": "shubhamsaboo/taste-skill",
+      "sourceType": "github",
+      "skillPath": "skills/taste-skill/SKILL.md",
+      "computedHash": "899b84384f74f540ea5284d9b2e9234e050998b42eacc805410b518d4226c0b3"
+    },
+    "friction-log": {
+      "source": "educlopez/smoothui",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/friction-log/SKILL.md",
+      "computedHash": "07246c5e6e2ffe425a52574635c26e24a523af6d734d3d4dccc1681961b03542"
+    },
+    "liquid-glass": {
+      "source": "deepika-builds/liquid-glass",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "8031c2082a8eeb12d7ac32e2954f66acf92096d08af4cbb98c47cfc0cd0c023d"
+    },
+    "smoothui-component-craft": {
+      "source": "educlopez/smoothui",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/smoothui-component-craft/SKILL.md",
+      "computedHash": "01cb49d1ca607727e37b4e2f7f0da5efef5ed9f17fac1c82ba241055d05d072d"
+    },
+    "unslop": {
+      "source": "heydamir/unslop",
+      "sourceType": "github",
+      "skillPath": "skills/unslop/SKILL.md",
+      "computedHash": "375ce784374371f9d8558244c48f8863ffdbf1ca99c66bb6b2db178c5197bc76"
+    },
+    "vercel-react-best-practices": {
+      "source": "educlopez/smoothui",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/vercel-react-best-practices/SKILL.md",
+      "computedHash": "8f1b4c61f670aaf4d765dadcf3b738980aa9f466e29dbe083d1120927f81ad2c"
+    },
+    "web-design-guidelines": {
+      "source": "educlopez/smoothui",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/web-design-guidelines/SKILL.md",
+      "computedHash": "d8e7d3afe37dcc8a97b99ffb5afdb4d0919ae0092ea8b68f44eb201f035e33ac"
+    }
+  }
+}

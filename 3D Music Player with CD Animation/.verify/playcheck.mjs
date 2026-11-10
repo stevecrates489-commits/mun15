@@ -57,6 +57,12 @@ await page.evaluate(async () => {
     tx.objectStore('tracks').put({ id: 1, file, title: 'Zqxv Wqkj Nnff', artist: 'Qqz Wvv' })
     tx.oncomplete = () => d.close()
   }
+  /* the default view is the Downloads Online folder (no "all" tab) */
+  localStorage.setItem(
+    'md-playlists',
+    JSON.stringify([{ id: -2, name: 'Downloads Online', trackIds: [1] }]),
+  )
+  localStorage.setItem('md-selected-playlist', '-2')
 })
 await safeReload()
 await page.waitForTimeout(3500)

@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Check, ImagePlus, Trash2, X } from 'lucide-react'
 import type { Track } from '../hooks/useAudioEngine'
+import { useChromeDrag, type ChromeOffset } from '../features/layout/useChromeDrag'
 
 interface Props {
   track: Track
@@ -9,6 +10,10 @@ interface Props {
   anchor: DOMRect
   onSave: (title: string, artist: string, cover?: string) => void
   onClose: () => void
+  /** layout editor — drag this card while an edit session runs */
+  editing?: boolean
+  offset?: ChromeOffset
+  onOffset?: (o: ChromeOffset) => void
 }
 
 const W = 300
@@ -22,7 +27,7 @@ const W = 300
  * Portaled to <body> because the stage applies `filter`/`transform` to its
  * subtree, which would make `position: fixed` relative to the wrong box.
  */
-export default function TrackMetaEditor({ track, anchor, onSave, onClose }: Props) {
+export default function TrackMetaEditor({ track, anchor, onSave, onClose, editing = false, offset, onOffset }: Props) {
   const [title, setTitle] = useState(track.title)
   const [artist, setArtist] = useState(track.artist)
   const [cover, setCover] = useState(track.cover)
@@ -30,6 +35,7 @@ export default function TrackMetaEditor({ track, anchor, onSave, onClose }: Prop
   const titleRef = useRef<HTMLInputElement>(null)
   const cardRef = useRef<HTMLDivElement>(null)
   const coverInputRef = useRef<HTMLInputElement>(null)
+  const drag = useChromeDrag({ editing, offset, onOffset })
 
   /* measured height: the card grew when the POSTER section was added, and a
      hardcoded estimate put the REMOVE button off-screen on short viewports */
@@ -105,9 +111,11 @@ export default function TrackMetaEditor({ track, anchor, onSave, onClose }: Prop
   return createPortal(
     <div
       ref={cardRef}
-      className="fixed z-[95] rounded-2xl border border-white/15 bg-black/90 p-4 shadow-[0_24px_60px_rgba(0,0,0,0.75)] backdrop-blur-md"
-      style={{ left, top, width: W, maxHeight: 'calc(100vh - 24px)', overflowY: 'auto' }}
+      className={`panel-resizable fixed z-[95] rounded-2xl border border-white/15 bg-black/90 p-4 shadow-[0_24px_60px_rgba(0,0,0,0.75)] backdrop-blur-md ${drag.editClass}`}
+      style={{ left, top, width: W, maxHeight: 'calc(100vh - 24px)', overflowY: 'auto', ...drag.style }}
       onKeyDown={(e) => e.stopPropagation()}
+      onPointerDownCapture={drag.onPointerDown}
+      onClickCapture={drag.onClickCapture}
     >
       <div className="mb-3 flex items-center justify-between">
         <span className="font-mono text-[9px] tracking-[0.25em] text-white/50">EDIT TRACK INFO</span>

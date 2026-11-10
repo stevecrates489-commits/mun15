@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { X, Plus, Images, Trash2 } from 'lucide-react'
 import { MAX_SECONDS as WALL_MAX_SECONDS, FPS_MIN, FPS_MAX, type WallPreset, type WallpaperRecord } from '../lib/wallpaperPipeline'
+import { useChromeDrag, type ChromeOffset } from '../features/layout/useChromeDrag'
 
 /* Wallpaper settings card (bottom-right): pick quality → pick fps → press
    CONVERT (selection is inert; the hook only converts on onConvert), speed,
@@ -73,6 +74,9 @@ export default function WallpaperSettingsPanel({
   onClose,
   closing = false,
   onClosed,
+  editing = false,
+  offset,
+  onOffset,
 }: {
   pendingWallFile: File | null
   wallQuality: WallPreset
@@ -101,7 +105,12 @@ export default function WallpaperSettingsPanel({
   onClose: () => void
   closing?: boolean
   onClosed?: () => void
+  /** layout editor — drag this panel while an edit session runs */
+  editing?: boolean
+  offset?: ChromeOffset
+  onOffset?: (o: ChromeOffset) => void
 }) {
+  const drag = useChromeDrag({ editing, offset, onOffset })
   useEffect(() => {
     if (!closing || !onClosed) return
     const t = window.setTimeout(onClosed, 200)
@@ -152,7 +161,10 @@ export default function WallpaperSettingsPanel({
 
   return (
     <div
-      className={`settings-panel fx-blur fixed bottom-[calc(13%+46px)] right-[5%] z-[87] max-h-[calc(100vh-180px)] w-72 overflow-y-auto overscroll-contain rounded-2xl border border-white/15 bg-black/85 p-4 backdrop-blur-md${closing ? ' is-closing' : ''}`}
+      className={`settings-panel panel-resizable fx-blur fixed top-[24%] left-[calc(95%-288px)] z-[87] max-h-[calc(100vh-180px)] w-72 overflow-y-auto overscroll-contain rounded-2xl border border-white/15 bg-black/85 p-4 backdrop-blur-md${closing ? ' is-closing' : ''} ${drag.editClass}`}
+      style={drag.style}
+      onPointerDownCapture={drag.onPointerDown}
+      onClickCapture={drag.onClickCapture}
     >
       <div className="mb-3 flex items-center justify-between">
         <span className="font-mono text-[9px] tracking-[0.25em] text-white/50">WALLPAPER SETTINGS</span>

@@ -327,6 +327,66 @@ div.settings-panel {
 div.settings-panel.is-closing {
   animation: panel-out 160ms ease-in both !important;
 }
+
+/* every pop-over panel can be resized from its bottom-right corner. `resize`
+   needs a scroll container, so these become one — their contents were already
+   taller than some windows. The saved CSS width/height remain the starting
+   size; the corner grip is the browser's native resizer, restyled to the same
+   thin glass line as the rest of the chrome. */
+div.panel-resizable {
+  resize: both;
+  overflow: auto;
+  min-width: 210px;
+  min-height: 150px;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px) !important;
+  scrollbar-width: thin;
+}
+
+div.panel-resizable::-webkit-resizer {
+  background:
+    linear-gradient(135deg, transparent 0 44%, rgba(255, 255, 255, 0.28) 45% 47%, transparent 48% 62%, rgba(255, 255, 255, 0.2) 63% 65%, transparent 66%);
+  border-bottom-right-radius: 14px;
+}
+
+/* the quiet scrollbar on EVERY panel — the default fat white bar draws more
+   attention than the content it scrolls (it reads as a control, not a
+   scroll). Same hairline as the Lyrics Providers list (.thin-scroll), applied
+   to every settings surface and the queue panel's editor/menu, so no panel
+   can ship the browser default any more. */
+.settings-panel,
+.panel-resizable,
+.qp-editor-card,
+.qp-menu-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+.settings-panel::-webkit-scrollbar,
+.panel-resizable::-webkit-scrollbar,
+.qp-editor-card::-webkit-scrollbar,
+.qp-menu-scroll::-webkit-scrollbar {
+  width: 3px;
+  height: 3px;
+}
+.settings-panel::-webkit-scrollbar-track,
+.panel-resizable::-webkit-scrollbar-track,
+.qp-editor-card::-webkit-scrollbar-track,
+.qp-menu-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.settings-panel::-webkit-scrollbar-thumb,
+.panel-resizable::-webkit-scrollbar-thumb,
+.qp-editor-card::-webkit-scrollbar-thumb,
+.qp-menu-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 3px;
+}
+.settings-panel::-webkit-scrollbar-thumb:hover,
+.panel-resizable::-webkit-scrollbar-thumb:hover,
+.qp-editor-card::-webkit-scrollbar-thumb:hover,
+.qp-menu-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.32);
+}
 /* the radio panel's exit: the abrupt 160ms read as a blink — a longer,
    decelerating slide reads as the panel being put away */
 div.settings-panel.is-closing.panel-out-soft {
@@ -445,6 +505,10 @@ option:checked {
    the panel on every scroll, so it always lands with the timer) */
 .lyrics-return-bar {
   animation: lyrics-return-fill 3s linear forwards;
+  /* the fill reads left→right: pinned origin + scaleX 0→1 (the keyframes) */
+  transform-origin: left center;
+  /* chromium, not green — the same metallic as the player's active buttons */
+  background: linear-gradient(90deg, #f4f7fa 0%, #c7ccd4 40%, #9aa2ac 70%, #e8ecf1 100%);
 }
 @keyframes lyrics-return-fill {
   from {
@@ -453,6 +517,15 @@ option:checked {
   to {
     transform: scaleX(1);
   }
+}
+
+/* the CURRENT LINE pill centers itself with the `translate` PROPERTY, not a
+   transform class: .settings-panel's panel-in animation fills `transform`
+   with `both`, and an animation-filled transform would permanently override
+   a translateX(-50%) utility — the pill would sit off-centre forever */
+div.settings-panel.lyrics-return {
+  left: 50%;
+  translate: -50% 0;
 }
 
 /* HIDE UI (H) — only while a live visual is on. The chrome fades out and
@@ -724,6 +797,25 @@ body.layout-editing * {
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.13);
 }
 
+/* tracklist batch 1 — the panel's material pass: hover and active read as
+   SURFACE STEPS with a machined top edge, not white washes; the active row
+   is the deck's "now playing" slot, lit from above. */
+.playlist-row:not(.playlist-row-active):hover {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+.playlist-row-active {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.09);
+}
+
+/* hover reveals sleep while the list scrolls: the cursor rides OVER rows
+   during a scroll, and buttons popping under it read as jitter. The scroll
+   handler stamps the container (see PlaylistPanel); until it settles, every
+   reveal stays dark and click-through. */
+.playlist-scroll[data-scrolling='1'] .row-hover-reveal {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
 /* the drag pair: the row that has been lifted parks in its slot as the
    placeholder (dimmed, inert), and a ghost copy of it flies with the cursor.
    The ghost is portalled to the body — the list's scroll clipping cannot cut
@@ -790,6 +882,12 @@ body.row-dragging {
   animation: fade-in 450ms var(--ease-settle) both;
 }
 
+/* the track-switch crossfade: the title re-keys per track and eases in at
+   250ms — inside the 300ms cap for track-change motion (opacity only) */
+.track-xfade {
+  animation: fade-in 250ms ease both;
+}
+
 /* the running ticker at the foot of the window: fade both edges, so a word
    never meets the frame at full brightness */
 .marquee-fade {
@@ -815,6 +913,30 @@ body.row-dragging {
     animation-duration: 1ms !important;
     animation-iteration-count: 1 !important;
   }
+}
+
+/* A quiet scrollbar.
+   The default one is a fat white bar, and on a black glass panel it reads
+   as a control rather than as a scroll — it draws more attention than the
+   things it is scrolling. This is a hairline that only shows where there is
+   something to scroll to. */
+.thin-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+.thin-scroll::-webkit-scrollbar {
+  width: 3px;
+  height: 3px;
+}
+.thin-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.thin-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 3px;
+}
+.thin-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.32);
 }
 
 /* chrome volume range */

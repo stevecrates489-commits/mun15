@@ -10,6 +10,14 @@ export default defineConfig({
 server: {
     port: 3000,
     host: '127.0.0.1',
+    // The verification harness lives one folder up, in the project's .verify/
+    // — and it mounts the REAL lyric panels in the browser, so its mount
+    // module has to go through Vite's transform (it is JSX). Vite only serves
+    // files inside the app folder by default, so the parent is allowed: the
+    // harness is dev-server only and never reaches a build.
+    fs: {
+      allow: ['..'],
+    },
     // tauri.conf.json pins devUrl to :3000 — without strictPort Vite would
     // silently fall back to :3001 and the app window would load the wrong
     // server (or nothing). Fail loudly instead.

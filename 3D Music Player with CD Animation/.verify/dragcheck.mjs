@@ -71,6 +71,13 @@ await page.evaluate(async () => {
     }
     tx.oncomplete = () => d.close()
   }
+  /* the default view is the Downloads Online folder (no "all" tab) — the
+     seeded tracks must be IN it */
+  localStorage.setItem(
+    'md-playlists',
+    JSON.stringify([{ id: -2, name: 'Downloads Online', trackIds: [1, 2, 3, 4, 5] }]),
+  )
+  localStorage.setItem('md-selected-playlist', '-2')
 })
 await safeReload()
 await page.waitForTimeout(3500)

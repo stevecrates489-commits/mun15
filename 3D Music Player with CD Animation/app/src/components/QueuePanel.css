@@ -1,0 +1,1299 @@
+/* Every rule is scoped to the panel, its edge strip or its portalled menu, so
+   it can sit over any screen without inheriting or leaking the layout styles.
+   Type matches the rest of the app: Space Grotesk for words, JetBrains Mono
+   for the small metadata (the old tracklist's exact pairing). */
+
+.qp-edge {
+  position: fixed;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 12px;
+  z-index: 79;
+}
+
+.qp-edge-right {
+  left: auto;
+  right: 0;
+}
+
+.qp-glass {
+  --qp-tx: #ffffff;
+  --qp-mut: rgba(255, 255, 255, 0.55);
+  --qp-pill: rgba(255, 255, 255, 0.1);
+  --qp-rowh: rgba(255, 255, 255, 0.09);
+  /* the active colour is the chrome/silver of the corner buttons — amber
+     belonged to the old drawer and read out of place over this panel */
+  --qp-acc: #e8ecf1;
+  font-family: 'Space Grotesk', system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
+.qp-panel {
+  position: fixed;
+  /* above the wallpaper/video layers (z 70–72) and the stage, below the
+     settings hubs (85) and modals so those still open on top.
+     top starts BELOW the header row: the header's left cluster (theme,
+     visualiser, lyrics) sits at z-65, so a panel starting at y16 covered
+     those controls and swallowed their clicks. */
+  z-index: 80;
+  left: max(16px, env(safe-area-inset-left));
+  top: max(56px, env(safe-area-inset-top));
+  bottom: max(16px, env(safe-area-inset-bottom));
+  width: min(var(--qp-w, 392px), calc(100vw - 32px));
+  height: min(780px, calc(100dvh - 72px));
+  border-radius: var(--qp-rad, 28px);
+  /* slide (the long move) + fade (280ms, under the 300ms animation cap):
+     the panel glides AND dims away instead of only sliding.
+     IMPORTANT: liquidGL writes inline `transition: none` while the lens
+     activates — these !important declarations outrank it so the slide and
+     the clicks never freeze, whatever the library does to inline styles. */
+  transition: transform 0.45s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.28s ease !important;
+  color: var(--qp-tx);
+  -webkit-font-smoothing: antialiased;
+  pointer-events: auto !important;
+  /* THE rectangular-edge fix: the scrim and the lens are painted inside a
+     clipped rounded box, so neither can show a square corner outside the
+     panel's radius. */
+  overflow: hidden;
+  isolation: isolate;
+}
+
+/* hosted by the layout editor (the global edit mode): fill the frame's
+   rectangle instead of docking at a screen edge */
+.qp-panel.qp-framed {
+  position: relative;
+  left: auto;
+  top: auto;
+  right: auto;
+  bottom: auto;
+  width: 100%;
+  height: 100%;
+  transition: none !important;
+}
+
+/* Solid · fast (the global data-glass switch): no backdrop work at all, so
+   the panel carries its own opaque pane to stay readable */
+[data-glass='off'] .qp-panel.qp-glass {
+  background: rgba(16, 16, 21, 0.93);
+}
+
+.qp-panel.qp-side-right {
+  left: auto;
+  right: max(16px, env(safe-area-inset-right));
+}
+
+.qp-panel.qp-side-left.qp-away,
+.qp-panel.qp-side-left.qp-closed {
+  transform: translateX(calc(-100% - 40px));
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+.qp-panel.qp-side-right.qp-away,
+.qp-panel.qp-side-right.qp-closed {
+  transform: translateX(calc(100% + 40px));
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+.qp-panel.lg-fallback {
+  background: rgba(24, 24, 30, 0.42);
+}
+
+/* liquidGL's activate step writes inline `opacity: 0` before its reveal
+   restores it — the panel must not blink in that window, so the standing
+   value is 1. The away/closed states are excluded (their !important rules
+   above own the fade-out). */
+.qp-panel:not(.qp-away):not(.qp-closed) {
+  opacity: 1 !important;
+}
+
+/* while the GPU lens is up it draws the refracted page over the panel's
+   inner scrim — the lens TINT takes over the darkening (same colour, same
+   alpha), so the scrim yields instead of double-darkening the glass */
+.qp-panel[data-lg='gpu'] .qp-in::before {
+  background: transparent;
+}
+
+.qp-panel::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+  pointer-events: none;
+  z-index: 4;
+}
+
+/* The scrim used to inherit its radius from .qp-in, which had none — that is
+   what painted a square dark slab over the glass corners. Both boxes now
+   carry the panel's radius. */
+.qp-in {
+  position: relative;
+  z-index: 3;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 18px 12px 8px;
+  min-height: 0;
+  border-radius: inherit;
+}
+
+.qp-in::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: rgba(10, 10, 14, var(--qp-scrim, 0.3));
+  pointer-events: none;
+}
+
+.qp-panel *,
+.qp-panel *::before,
+.qp-panel *::after {
+  box-sizing: border-box;
+}
+
+.qp-panel button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  padding: 0;
+}
+
+.qp-panel ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.qp-panel :focus-visible {
+  outline: 2px solid var(--qp-acc);
+  outline-offset: 2px;
+}
+
+/* ---------------------------------------------------------------- header */
+
+.qp-head {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  padding: 0 6px 0 8px;
+}
+
+.qp-head > div:first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.qp-head h1 {
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin: 0;
+  line-height: 1.2;
+}
+
+.qp-head p {
+  font-size: 12px;
+  color: var(--qp-mut);
+  margin: 2px 0 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.qp-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex: none;
+}
+
+.qp-head .qp-ib {
+  width: 28px;
+  height: 28px;
+}
+
+.qp-ib {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  color: var(--qp-mut);
+  transition: background 0.15s, color 0.15s;
+}
+
+.qp-ib:hover,
+.qp-ib.qp-on {
+  background: var(--qp-rowh);
+  color: var(--qp-tx);
+}
+
+.qp-ib.qp-danger:hover {
+  background: rgba(255, 90, 90, 0.14);
+  color: #ff9a9a;
+}
+
+.qp-i {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.qp-i[data-fill='true'] {
+  fill: currentColor;
+  stroke: none;
+}
+
+.qp-pin svg {
+  transform: rotate(45deg);
+  transition: transform 0.2s;
+}
+
+.qp-pin[aria-pressed='true'] {
+  color: #15130e;
+  background: var(--qp-acc);
+}
+
+.qp-pin[aria-pressed='true'] svg {
+  transform: rotate(0);
+}
+
+/* ------------------------------------------------------------ pop settings */
+
+.qp-pop {
+  margin: 8px 8px 0;
+  padding: 10px 12px 12px;
+  border-radius: 14px;
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.03));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 12px 28px rgba(0, 0, 0, 0.28);
+  flex: none;
+}
+
+.qp-pop h3 {
+  margin: 0 0 2px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--qp-mut);
+}
+
+.qp-pop p {
+  margin: 0 0 8px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--qp-mut);
+}
+
+/* ------------------------------------------------------------------- nav */
+
+.qp-nav {
+  position: relative;
+  display: flex;
+  gap: 4px;
+  margin: 12px 0 8px;
+  padding: 3px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.07);
+  flex: none;
+}
+
+.qp-nav button {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  height: 32px;
+  border-radius: 11px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--qp-mut);
+  transition: background 0.2s, color 0.2s;
+}
+
+.qp-nav button[aria-selected='true'] {
+  color: var(--qp-tx);
+}
+
+.qp-thumb {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc(50% - 5px);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  transition: transform 0.5s cubic-bezier(0.3, 1.25, 0.35, 1);
+}
+
+.qp-nav[data-tab='p'] .qp-thumb {
+  transform: translateX(calc(100% + 4px));
+}
+
+/* ------------------------------------------------------------------ body */
+
+.qp-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.qp-body > div {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.qp-slide-right {
+  animation: qpSlideRight 0.43s cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
+.qp-slide-left {
+  animation: qpSlideLeft 0.43s cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
+@keyframes qpSlideRight {
+  from {
+    transform: translateX(40%);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+@keyframes qpSlideLeft {
+  from {
+    transform: translateX(-40%);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+.qp-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.qp-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px 8px;
+  min-height: 38px;
+  flex: none;
+}
+
+.qp-sp {
+  flex: 1;
+}
+
+.qp-bar > span:not(.qp-sp) {
+  font-size: 12.5px;
+  color: var(--qp-mut);
+  padding-left: 6px;
+}
+
+.qp-pill {
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 500;
+  background: var(--qp-pill);
+  color: var(--qp-tx);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: background 0.15s;
+  white-space: nowrap;
+}
+
+/* the bar and editor actions are affordances, not headings — the compact
+   cut keeps them inside their rows instead of towering over the text, and
+   the muted skin lets them belong to the glass instead of shouting over it */
+.qp-pill-sm {
+  height: 22px;
+  padding: 0 8px;
+  font-size: 8.5px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 7px;
+  gap: 4px;
+  background: rgba(255, 255, 255, 0.035);
+  color: rgba(255, 255, 255, 0.52);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.qp-pill-sm:hover {
+  background: rgba(255, 255, 255, 0.075);
+  border-color: rgba(255, 255, 255, 0.2);
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.qp-pill-sm svg {
+  width: 11px;
+  height: 11px;
+}
+
+.qp-pill:hover {
+  background: var(--qp-rowh);
+}
+
+.qp-pill svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.qp-pill[aria-pressed='true'] {
+  background: rgba(232, 236, 241, 0.2);
+  color: var(--qp-tx);
+}
+
+.qp-icon-pill {
+  padding: 0 9px;
+}
+
+.qp-pill-primary {
+  background: rgba(232, 236, 241, 0.14);
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.qp-pill-primary:hover {
+  background: rgba(232, 236, 241, 0.24);
+  color: #fff;
+}
+
+.qp-icon-pill {
+  padding: 0 7px;
+}
+
+.qp-note {
+  flex: none;
+  padding: 0 10px 6px;
+  font-size: 11px;
+  color: var(--qp-acc);
+}
+
+/* ------------------------------------------------------------------ list */
+
+.qp-list {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 2px 2px 14px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.qp-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.qp-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.22);
+  border-radius: 99px;
+}
+
+.qp-row {
+  position: relative;
+  z-index: 1;
+  flex: none;
+  height: 56px;
+  display: grid;
+  grid-template-columns: 16px 40px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 0 8px 0 4px;
+  border-radius: 14px;
+  background: transparent;
+  transition: background 0.25s, box-shadow 0.25s;
+}
+
+/* grip-less rows: art · meta · acts. Queue rows keep the 4-column template
+   even when the grip is an empty placeholder — the placeholder still counts
+   as a child, and a 3-column template would push the meta into the acts
+   column (the right-aligned-text bug). */
+.qp-row.qp-t,
+.qp-row.qp-pl {
+  grid-template-columns: 40px 1fr auto;
+  padding-left: 8px;
+}
+
+.qp-row.qp-pl {
+  grid-template-columns: 40px 1fr auto auto;
+  cursor: pointer;
+}
+
+.qp-glider {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  top: 0;
+  height: 56px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s, transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
+  z-index: 0;
+}
+
+/* the playing track, marked so it cannot be mistaken for the rest: a lit
+   row only. The tint FADES in on the change (the 0.25s transition above)
+   — no movement, no marker bar, no glow. */
+.qp-row.qp-cur {
+  background: rgba(255, 255, 255, 0.09);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+}
+
+.qp-row.qp-cur b {
+  color: #fff;
+}
+
+.qp-row.qp-lift {
+  z-index: 5;
+  background: rgba(60, 60, 68, 0.78);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
+  transition: none;
+  cursor: grabbing;
+}
+
+/* -------------------------------------------------------------------- art */
+
+.qp-art {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: linear-gradient(
+    135deg,
+    hsl(var(--qp-h, 30) 52% 44%),
+    hsl(calc(var(--qp-h, 30) + 40) 58% 22%)
+  );
+  font-weight: 600;
+  font-size: 16px;
+  color: rgba(255, 255, 255, 0.85);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  flex: none;
+}
+
+.qp-art img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.qp-art > span {
+  position: relative;
+  z-index: 1;
+}
+
+button.qp-art::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  transition: opacity 0.15s;
+  z-index: 2;
+}
+
+button.qp-art:hover::after,
+button.qp-art:focus-visible::after {
+  opacity: 1;
+}
+
+.qp-art-play {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 16px;
+  height: 16px;
+  fill: #fff;
+  stroke: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+  z-index: 3;
+}
+
+button.qp-art:hover .qp-art-play,
+button.qp-art:focus-visible .qp-art-play {
+  opacity: 1;
+}
+
+/* ------------------------------------------------------------------- meta */
+
+.qp-meta {
+  min-width: 0;
+  line-height: 1.25;
+  text-align: left;
+  justify-self: start;
+  width: 100%;
+}
+
+.qp-meta b,
+.qp-meta i {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* the old tracklist's exact pairing: 14px Space Grotesk semibold over a
+   10px mono artist line */
+.qp-meta b {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.025em;
+  color: rgba(255, 255, 255, 0.8);
+  transition: color 0.15s;
+}
+
+.qp-row:hover .qp-meta b,
+.qp-row:focus-within .qp-meta b {
+  color: rgba(255, 255, 255, 1);
+}
+
+.qp-meta i {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  font-style: normal;
+  color: rgba(255, 255, 255, 0.4);
+  margin-top: 2px;
+}
+
+/* the text fades out BEFORE the action icons, always — not only on hover:
+   the icons overlay the meta box's right edge, so a long title/artist must
+   be fully gone before the icons' zone instead of running underneath them.
+   Queue rows carry two icons (pencil + cross ≈ 59px); playlist rows carry
+   four (heart + pencil + plus + cross ≈ 113px), so they fade earlier. */
+.qp-row .qp-meta {
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 96px), transparent calc(100% - 46px));
+  mask-image: linear-gradient(90deg, #000 calc(100% - 96px), transparent calc(100% - 46px));
+}
+
+.qp-row.qp-t .qp-meta {
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 132px), transparent calc(100% - 116px));
+  mask-image: linear-gradient(90deg, #000 calc(100% - 132px), transparent calc(100% - 116px));
+}
+
+.qp-meta:has(.qp-rn) {
+  -webkit-mask-image: none !important;
+  mask-image: none !important;
+}
+
+/* the favourite heart: solid dark red when armed, outline otherwise */
+.qp-ib.qp-fav {
+  color: #a82e2e;
+}
+
+.qp-acts {
+  position: absolute;
+  right: 6px;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+/* row actions match the old tracklist's compact controls: 26px hit area,
+   13px glyph — never towering over the text */
+.qp-acts .qp-ib,
+.qp-folder-acts .qp-ib {
+  width: 26px;
+  height: 26px;
+}
+
+.qp-acts .qp-i,
+.qp-folder-acts .qp-i {
+  width: 13px;
+  height: 13px;
+}
+
+.qp-row:hover .qp-acts,
+.qp-row:focus-within .qp-acts {
+  opacity: 1;
+}
+
+.qp-folder-acts {
+  display: flex;
+  align-items: center;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.qp-row:hover .qp-folder-acts,
+.qp-row:focus-within .qp-folder-acts {
+  opacity: 1;
+}
+
+.qp-chev {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: var(--qp-mut);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transform: rotate(180deg);
+}
+
+/* ------------------------------------------------------------------- grip */
+
+.qp-grip {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 40px;
+  color: var(--qp-mut);
+  cursor: grab;
+  opacity: 0;
+  touch-action: none;
+  transition: opacity 0.15s;
+}
+
+.qp-grip.qp-grip-empty {
+  pointer-events: none;
+}
+
+.qp-grip svg {
+  width: 12px;
+  height: 12px;
+  fill: currentColor;
+}
+
+.qp-row:hover .qp-grip,
+.qp-row:focus-within .qp-grip,
+.qp-row.qp-lift .qp-grip {
+  opacity: 1;
+}
+
+/* ------------------------------------------------------------------ empty */
+
+.qp-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+  justify-content: center;
+  color: var(--qp-mut);
+  font-size: 14px;
+  text-align: center;
+  padding: 0 20px;
+}
+
+.qp-hint {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+/* ------------------------------------------------------------------ rename */
+
+.qp-rn {
+  width: 100%;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--qp-tx);
+  background: rgba(255, 255, 255, 0.12);
+  border: 0;
+  border-radius: 7px;
+  padding: 3px 7px;
+  outline: 2px solid var(--qp-acc);
+  user-select: text;
+}
+
+/* ------------------------------------------------------------------ search */
+
+.qp-sbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  margin: 0 4px 8px;
+  padding: 0 5px 0 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.09);
+  flex: none;
+}
+
+.qp-sbox:focus-within {
+  box-shadow: 0 0 0 2px rgba(232, 236, 241, 0.55);
+}
+
+.qp-sbox > svg {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: var(--qp-mut);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.qp-sbox input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  background: none;
+  border: 0;
+  outline: 0;
+  color: var(--qp-tx);
+  font: inherit;
+  font-size: 13.5px;
+}
+
+.qp-sbox input::placeholder {
+  color: var(--qp-mut);
+}
+
+.qp-sbox input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.qp-sbox .qp-ib {
+  width: 26px;
+  height: 26px;
+  flex: none;
+}
+
+.qp-lbl {
+  flex: none;
+  padding: 8px 8px 2px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--qp-mut);
+}
+
+/* --------------------------------------------------------------- sliders */
+
+/* the glass settings' ranges: label left, value right, a thin rail between */
+.qp-range {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  font-size: 12.5px;
+}
+
+.qp-range > span {
+  flex: none;
+  width: 76px;
+  color: var(--qp-tx);
+}
+
+.qp-range > b {
+  flex: none;
+  width: 38px;
+  text-align: right;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--qp-mut);
+}
+
+.qp-range input[type='range'] {
+  flex: 1;
+  min-width: 0;
+  height: 18px;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.qp-range input[type='range']::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.qp-range input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -4.5px;
+  border-radius: 50%;
+  background: var(--qp-tx);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  transition: transform 0.15s;
+}
+
+.qp-range input[type='range']:hover::-webkit-slider-thumb {
+  transform: scale(1.15);
+}
+
+.qp-range input[type='range']::-moz-range-track {
+  height: 3px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.qp-range input[type='range']::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--qp-tx);
+}
+
+/* -------------------------------------------------------------- track editor */
+
+.qp-editor {
+  position: absolute;
+  inset: 0;
+  z-index: 12;
+  display: grid;
+  place-items: center;
+  padding: 14px;
+  background: rgba(6, 7, 10, 0.62);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-radius: inherit;
+}
+
+.qp-editor-card {
+  width: 100%;
+  max-height: 100%;
+  overflow-y: auto;
+  border-radius: 18px;
+  padding: 14px;
+  background: linear-gradient(165deg, rgba(40, 40, 48, 0.98), rgba(14, 14, 18, 0.98));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 24px 60px rgba(0, 0, 0, 0.6);
+  scrollbar-width: thin;
+}
+
+.qp-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.qp-field {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.qp-field > span {
+  display: block;
+  margin-bottom: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--qp-mut);
+}
+
+.qp-field input {
+  width: 100%;
+  height: 32px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 9px;
+  color: var(--qp-tx);
+  background: rgba(255, 255, 255, 0.08);
+  font: inherit;
+  font-size: 13px;
+  outline: 0;
+}
+
+.qp-field input:focus {
+  box-shadow: 0 0 0 2px rgba(232, 236, 241, 0.5);
+}
+
+.qp-source {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 2px 0 10px;
+  padding: 7px 9px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 11px;
+  color: var(--qp-mut);
+}
+
+.qp-source b {
+  color: #9fe8ff;
+  font-weight: 600;
+  text-align: right;
+}
+
+.qp-poster {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.qp-poster-img {
+  width: 62px;
+  height: 62px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+  font-size: 22px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.qp-poster-img img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.qp-poster-btns {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 1;
+}
+
+.qp-filebtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 22px;
+  padding: 0 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.035);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  font-size: 8.5px;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.52);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.qp-filebtn:hover {
+  background: rgba(255, 255, 255, 0.075);
+  border-color: rgba(255, 255, 255, 0.2);
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.qp-filebtn svg {
+  width: 11px;
+  height: 11px;
+}
+
+.qp-filebtn input {
+  display: none;
+}
+
+.qp-filebtn-danger {
+  color: rgba(255, 154, 154, 0.75);
+  background: rgba(255, 90, 90, 0.06);
+}
+
+.qp-filebtn-danger:hover {
+  background: rgba(255, 90, 90, 0.12);
+  color: #ff9a9a;
+}
+
+.qp-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 2px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.qp-editor-actions .qp-pill-sm {
+  height: 23px;
+  padding: 0 9px;
+}
+
+/* ------------------------------------------------------------- context menu */
+
+.qp-menu {
+  position: fixed;
+  z-index: 120;
+  width: 216px;
+  max-height: min(60vh, 300px);
+  display: flex;
+  flex-direction: column;
+  padding: 5px;
+  border-radius: 12px;
+  background: #101014;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1), 0 20px 50px rgba(0, 0, 0, 0.7);
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+  color: #f5f2ec;
+}
+
+.qp-menu > button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px;
+  border-radius: 8px;
+  font-size: 12px;
+  text-align: left;
+  color: rgba(245, 242, 236, 0.85);
+}
+
+.qp-menu > button:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.qp-menu > button svg,
+.qp-menu-scroll button svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+}
+
+.qp-menu-lbl {
+  padding: 8px 8px 4px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: rgba(245, 242, 236, 0.45);
+}
+
+.qp-menu-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.qp-menu-scroll button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  border-radius: 8px;
+  font-size: 12px;
+  text-align: left;
+  color: rgba(245, 242, 236, 0.8);
+}
+
+.qp-menu-scroll button:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.qp-menu-empty {
+  display: block;
+  padding: 6px 8px;
+  font-size: 11px;
+  color: rgba(245, 242, 236, 0.4);
+}
+
+/* ------------------------------------------------------------------ toast */
+
+.qp-toast {
+  position: absolute;
+  z-index: 6;
+  left: 50%;
+  bottom: 18px;
+  transform: translate(-50%, 12px);
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 500;
+  background: rgba(20, 20, 24, 0.82);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s, transform 0.2s;
+  white-space: nowrap;
+}
+
+.qp-toast.qp-show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.qp-spin {
+  animation: qpSpin 0.9s linear infinite;
+}
+
+@keyframes qpSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (hover: none) {
+  .qp-acts,
+  .qp-folder-acts,
+  .qp-grip {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .qp-panel,
+  .qp-panel * {
+    transition: none !important;
+    animation: none !important;
+  }
+}

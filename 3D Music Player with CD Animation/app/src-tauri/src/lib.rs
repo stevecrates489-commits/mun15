@@ -1,4 +1,5 @@
 mod dannify;
+mod lyrics;
 mod sources;
 mod visualizer;
 
@@ -60,6 +61,7 @@ pub fn run() {
             dannify::dannify_account,
             dannify::dannify_sign_in,
             dannify::dannify_version,
+            lyrics::lyrics_http_get,
             visualizer::visualizer_status,
             visualizer::visualizer_start,
             visualizer::visualizer_stop,
@@ -79,6 +81,7 @@ pub fn run() {
             sources::commands::sources_play,
             sources::commands::sources_cancel,
             sources::commands::sources_health_check,
+            sources::commands::radio_tap,
             sources::yt_commands::youtube_sign_in_start,
             sources::yt_commands::youtube_sign_in_finish,
             sources::yt_commands::youtube_sign_in_cancel,

@@ -30,6 +30,23 @@ export function clampBox(b: LayoutBox): LayoutBox {
   }
 }
 
+/* the loose clamp for UNBOUNDED panels (the carousel): no arbitrary min/max
+   on the SIZE — the user may scale it as small or as large as they like. A
+   small floor keeps the frame's own handles grabbable; the position stays
+   viewport-clamped so the pane can still be found. */
+export function clampLoose(b: LayoutBox): LayoutBox {
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+  const w = Math.max(b.w, 40)
+  const h = Math.max(b.h, 40)
+  return {
+    w,
+    h,
+    x: Math.min(Math.max(b.x, 0), Math.max(0, vw - w)),
+    y: Math.min(Math.max(b.y, 0), Math.max(0, vh - h)),
+  }
+}
+
 function readBox(key: string): LayoutBox | null {
   try {
     const raw = localStorage.getItem(key)
@@ -58,8 +75,12 @@ export function useLayoutBox(key: string, legacyKey?: string) {
 
   const setBox = useCallback((b: LayoutBox | null) => {
     setBoxState(b)
-    if (b === null) localStorage.removeItem(key)
-    else localStorage.setItem(key, JSON.stringify(b))
+    try {
+      if (b === null) localStorage.removeItem(key)
+      else localStorage.setItem(key, JSON.stringify(b))
+    } catch {
+      /* private mode or a full quota — the box still applies for this session */
+    }
   }, [key])
 
   return { box, setBox }

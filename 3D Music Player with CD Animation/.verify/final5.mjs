@@ -52,6 +52,12 @@ await page.evaluate(async () => {
       tx.oncomplete = () => { d.close(); res(null) }
     }
   })
+  /* the default view is the Downloads Online folder (no "all" tab) */
+  localStorage.setItem(
+    'md-playlists',
+    JSON.stringify([{ id: -2, name: 'Downloads Online', trackIds: [1] }]),
+  )
+  localStorage.setItem('md-selected-playlist', '-2')
 })
 try { await page.reload({ waitUntil: 'domcontentloaded', timeout: 20000 }) } catch {}
 await page.waitForTimeout(3500)

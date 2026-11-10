@@ -10,6 +10,7 @@ import {
 } from '../lib/radioBrowser'
 import { getProxyBase, setProxyBase, type IcyStatus } from '../lib/icy'
 import type { KnownStation, RadioSong } from '../features/radio/useRadio'
+import { useChromeDrag, type ChromeOffset } from '../features/layout/useChromeDrag'
 
 const FIELDS: { id: SearchField; label: string }[] = [
   { id: 'language', label: 'Language' },
@@ -59,6 +60,10 @@ interface Props {
   onToggleLyrics: () => void
   stop: () => void
   onClose: () => void
+  /** layout editor — drag this panel while an edit session runs */
+  editing?: boolean
+  offset?: ChromeOffset
+  onOffset?: (o: ChromeOffset) => void
 }
 
 /* the shape a row already holds — handed along when a station is starred or
@@ -265,7 +270,11 @@ export default function RadioPanel({
   onToggleLyrics,
   stop,
   onClose,
+  editing = false,
+  offset,
+  onOffset,
 }: Props) {
+  const drag = useChromeDrag({ editing, offset, onOffset })
   const [tab, setTab] = useState<'known' | 'search'>('known')
   const [field, setField] = useState<SearchField>('language')
   const [query, setQuery] = useState('')
@@ -361,9 +370,12 @@ export default function RadioPanel({
 
   return (
     <div
-      className={`settings-panel fx-blur fixed bottom-[calc(13%+46px)] left-[5%] z-[89] flex max-h-[min(62vh,520px)] w-[min(92vw,560px)] flex-col rounded-2xl border border-white/15 bg-black/90 backdrop-blur-md${
+      className={`settings-panel panel-resizable fx-blur fixed top-[24%] left-[5%] z-[89] flex max-h-[min(62vh,520px)] w-[min(92vw,560px)] flex-col rounded-2xl border border-white/15 bg-black/90 backdrop-blur-md${
         closing ? ' is-closing panel-out-soft' : ''
-      }`}
+      } ${drag.editClass}`}
+      style={drag.style}
+      onPointerDownCapture={drag.onPointerDown}
+      onClickCapture={drag.onClickCapture}
     >
       {/* header */}
       <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">

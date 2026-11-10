@@ -160,14 +160,26 @@ function suffixFor(type: string, file: string): string {
   return own && own !== '.dnf' ? own : '.m4a'
 }
 
-/** The song itself, as a file this player can keep and play. */
+/** The song itself, as a file this player can keep and play.
+ *
+ *  The fetch carries a DEADLINE: a stalled extension connection used to hang
+ *  the pass forever, and the Downloads REFRESH button spun on it for as long
+ *  as the socket stayed open. A download can be large, so the budget is
+ *  generous (60s) — but it is finite, and an expired one reads as a failed
+ *  import, not a wedged button. */
 export async function dannifyAudio(track: DannifyDownload): Promise<File> {
-  const answer = await fetch(`${EXTENSION}${track.url}`)
-  if (!answer.ok) throw new Error(`the extension answered ${answer.status}`)
-  const blob = await answer.blob()
-  const type = (answer.headers.get('content-type') ?? '').split(';')[0].trim()
-  const name = `${track.artist ? `${track.artist} - ` : ''}${track.title}${suffixFor(type, track.file)}`
-  return new File([blob], name, { type: type || 'audio/mp4' })
+  const gone = new AbortController()
+  const timer = window.setTimeout(() => gone.abort(), 60_000)
+  try {
+    const answer = await fetch(`${EXTENSION}${track.url}`, { signal: gone.signal })
+    if (!answer.ok) throw new Error(`the extension answered ${answer.status}`)
+    const blob = await answer.blob()
+    const type = (answer.headers.get('content-type') ?? '').split(';')[0].trim()
+    const name = `${track.artist ? `${track.artist} - ` : ''}${track.title}${suffixFor(type, track.file)}`
+    return new File([blob], name, { type: type || 'audio/mp4' })
+  } finally {
+    window.clearTimeout(timer)
+  }
 }
 
 /**
@@ -178,8 +190,10 @@ export async function dannifyAudio(track: DannifyDownload): Promise<File> {
  */
 export async function dannifyCover(track: DannifyDownload): Promise<string | undefined> {
   if (!track.cover) return undefined
+  const gone = new AbortController()
+  const timer = window.setTimeout(() => gone.abort(), 10_000)
   try {
-    const answer = await fetch(`${EXTENSION}${track.cover}`)
+    const answer = await fetch(`${EXTENSION}${track.cover}`, { signal: gone.signal })
     if (!answer.ok) return undefined
     const blob = await answer.blob()
     if (!blob.size) return undefined
@@ -191,5 +205,7 @@ export async function dannifyCover(track: DannifyDownload): Promise<string | und
     })
   } catch {
     return undefined
+  } finally {
+    window.clearTimeout(timer)
   }
 }

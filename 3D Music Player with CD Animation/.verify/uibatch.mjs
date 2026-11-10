@@ -82,6 +82,12 @@ const seedTracks = () =>
         tx.onerror = () => rej(new Error('idb put failed'))
       }
     })
+    /* the default view is the Downloads Online folder (no "all" tab) */
+    localStorage.setItem(
+      'md-playlists',
+      JSON.stringify([{ id: -2, name: 'Downloads Online', trackIds: [1, 2, 3] }]),
+    )
+    localStorage.setItem('md-selected-playlist', '-2')
   })
 await seedTracks()
 await safeReload()

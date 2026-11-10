@@ -22,6 +22,7 @@ import {
   type VisualizerStatus,
 } from './bridge'
 import { LocalPcmTap, RadioPcmTap } from './pcm'
+import { radioVisualizerUrl } from '../../lib/radioTap'
 
 const MODE_KEY = 'md-visualizer-mode'
 const DIR_KEY = 'md-visualizer-dir'
@@ -380,10 +381,15 @@ export function useVisualizer({ getAnalyser, radioUrl, radioPlaying, onFrame }: 
       return
     }
     let alive = true
-    void tap.start(radioUrl).then((ok) => {
+    void (async () => {
+      /* the tap reads a loopback copy when the native side is available —
+         that is what makes a non-CORS station measurable */
+      const tapUrl = await radioVisualizerUrl(radioUrl)
+      if (!alive) return
+      const ok = await tap.start(tapUrl)
       if (!alive) return
       setRadioBlocked(!ok)
-    })
+    })()
     return () => {
       alive = false
       /* the old stream must not keep playing behind the new one */

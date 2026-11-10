@@ -1,0 +1,151 @@
+/* The lyric provider tests.
+ *
+ * One page per provider, and this one for all of them.
+ *
+ * Open it straight from the file system — no build, no server. Put a title,
+ * an artist and a length in at the top, press TEST on a provider, and it
+ * shows what that provider actually answered: the address that was asked,
+ * the status, the body, and how many lines of lyric came back.
+ *
+ * A provider marked SHELL answers with no CORS header, so a page cannot read
+ * it. That refusal is the browser's rule, not the provider's — the player
+ * asks those through its own shell, where they work. */
+:root {
+  color-scheme: dark;
+  --ink: #e8ecf1;
+  --dim: rgba(232, 236, 241, 0.55);
+  --faint: rgba(232, 236, 241, 0.3);
+  --line: rgba(255, 255, 255, 0.12);
+  --good: #34d399;
+  --bad: #fda4af;
+  --t1: #34d399;
+  --t2: #7dd3fc;
+  --t3: #fcd34d;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  padding: 28px;
+  background: #06080b;
+  color: var(--ink);
+  font: 13px/1.5 "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+}
+h1 {
+  margin: 0 0 4px;
+  font-size: 15px;
+  letter-spacing: 0.18em;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+p.lede {
+  margin: 0 0 22px;
+  max-width: 74ch;
+  color: var(--dim);
+  font-size: 12px;
+}
+form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+  margin-bottom: 8px;
+}
+label { display: grid; gap: 4px; }
+label span {
+  font-family: ui-monospace, monospace;
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  color: var(--faint);
+}
+input {
+  width: 190px;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--ink);
+  font: inherit;
+}
+input:focus { outline: 1px solid rgba(255, 255, 255, 0.3); }
+button {
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--ink);
+  font: inherit;
+  font-family: ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  cursor: pointer;
+}
+button:hover { background: rgba(255, 255, 255, 0.12); }
+#grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  margin-top: 18px;
+}
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.025);
+}
+.card.hit { border-color: rgba(52, 211, 153, 0.4); }
+.card.miss { border-color: rgba(253, 164, 175, 0.35); }
+.card.blocked { opacity: 0.55; }
+.row { display: flex; align-items: center; gap: 8px; }
+.tier {
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-family: ui-monospace, monospace;
+  font-size: 9px;
+  letter-spacing: 0.1em;
+}
+.card[data-tier="1"] .tier { color: var(--t1); border-color: rgba(52, 211, 153, 0.3); }
+.name { font-size: 13px; }
+.tag {
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--faint);
+  font-family: ui-monospace, monospace;
+  font-size: 8px;
+  letter-spacing: 0.12em;
+}
+.sub { color: var(--faint); font-size: 11px; }
+.out { min-height: 42px; font-size: 11px; }
+.out .head { color: var(--good); font-family: ui-monospace, monospace; font-size: 10px; }
+.card.miss .out .head { color: var(--bad); }
+.out .url {
+  margin-top: 3px;
+  color: var(--faint);
+  font-family: ui-monospace, monospace;
+  font-size: 9px;
+  word-break: break-all;
+}
+.out .note {
+  margin-top: 5px;
+  color: var(--dim);
+  font-size: 10px;
+  line-height: 1.45;
+}
+.out .body {
+  max-height: 190px;
+  margin: 6px 0 0;
+  padding: 7px;
+  overflow: auto;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.4);
+  color: rgba(232, 236, 241, 0.6);
+  font-family: ui-monospace, monospace;
+  font-size: 9.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

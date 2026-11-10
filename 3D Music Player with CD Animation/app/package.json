@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "test:unit": "node tests/paint.test.mts && node tests/theme.test.mts && node tests/songclock.test.mts && node tests/visualizer.test.mts",
+    "test:unit": "node tests/paint.test.mts && node tests/theme.test.mts && node tests/songclock.test.mts && node tests/visualizer.test.mts && node tests/lyrics.test.mts",
     "dannify:update": "python tools/update-dannify.py",
     "preview": "vite preview",
     "tauri": "tauri"
@@ -51,6 +51,7 @@
     "date-fns": "^4.1.0",
     "embla-carousel-react": "^8.6.0",
     "input-otp": "^1.4.2",
+    "liquid-gl": "^3.0.0",
     "lucide-react": "^0.562.0",
     "mediabunny": "^1.61.3",
     "milkdrop-preset-converter": "^0.1.2",

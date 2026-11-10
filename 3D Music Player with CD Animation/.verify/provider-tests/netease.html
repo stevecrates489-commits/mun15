@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>netease — lyric provider test</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body data-provider="netease">
+    <h1>netease</h1>
+    <p class="lede">
+      One provider, on its own. Put a title, an artist and a length in at the top and press TEST:
+      the card shows the address that was asked, the status, the body and how many lines of lyric
+      came back. A provider tagged <b>SHELL</b> answers with no CORS header, so this page cannot
+      read it — that refusal is the browser’s rule, not the provider’s, and the player asks those
+      through its own shell where they work.
+    </p>
+
+    <form onsubmit="return false">
+      <label>
+        <span>TITLE</span>
+        <input id="title" value="One More Time" />
+      </label>
+      <label>
+        <span>ARTIST</span>
+        <input id="artist" value="Daft Punk" />
+      </label>
+      <label>
+        <span>LENGTH (SECONDS)</span>
+        <input id="duration" value="320" />
+      </label>
+      <button id="test-all" type="button">TEST</button>
+    </form>
+
+    <div id="grid"></div>
+
+    <script src="providers.js"></script>
+    <script src="page.js"></script>
+  </body>
+</html>

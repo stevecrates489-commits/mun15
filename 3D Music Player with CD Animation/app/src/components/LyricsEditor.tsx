@@ -62,7 +62,7 @@ export default function LyricsEditor({ title, artist, localTtml, onExtract, onSa
 
   return (
     <div className="fixed inset-0 z-[96] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
-      <div className="settings-panel w-[min(92vw,560px)] rounded-2xl border border-white/15 bg-black/95 p-4">
+      <div className="settings-panel panel-resizable w-[min(92vw,560px)] rounded-2xl border border-white/15 bg-black/95 p-4">
         <div className="mb-3 flex items-center justify-between">
           <span className="font-mono text-[9px] tracking-[0.25em] text-white/50">EDIT LYRICS</span>
           <button onClick={onClose} aria-label="Close editor" className="text-white/40 hover:text-white">
