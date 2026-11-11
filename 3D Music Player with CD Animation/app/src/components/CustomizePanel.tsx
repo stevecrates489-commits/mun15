@@ -3,10 +3,6 @@ import { X, Move, RotateCcw, Hand } from 'lucide-react'
 import { useChromeDrag, type ChromeOffset } from '../features/layout/useChromeDrag'
 
 interface Props {
-  /** whether the CD is currently on the stage — the lyrics editor saves a
-      DIFFERENT rectangle for each state, so the panel says which one a save
-      will land in */
-  cdVisible: boolean
   /** the lyrics' CUSTOM POSITION toggle (moved here from Lyrics Settings) */
   lyricsCustom: boolean
   onLyricsCustom: (on: boolean) => void
@@ -16,9 +12,6 @@ interface Props {
   /** a saved player-panel rectangle exists (enables RESET) */
   musicSaved: boolean
   onResetMusic: () => void
-  /** a saved disc rectangle exists (enables RESET) */
-  discSaved: boolean
-  onResetDisc: () => void
   /** a saved carousel rectangle exists (enables RESET) */
   carouselSaved: boolean
   onResetCarousel: () => void
@@ -44,24 +37,21 @@ interface Props {
 
 /**
  * The central hub for layout editing. One place that says which panels can
- * be moved (lyrics, queue panel, player panel), starts and stops their edit
- * modes, and owns the CUSTOM POSITION toggle that used to live buried in the
- * lyrics settings.
+ * be moved (the lyrics, the queue panel, the player panel), starts and stops
+ * their edit modes, and owns the CUSTOM POSITION toggle that used to live
+ * buried in the lyrics settings.
  *
  * Edit mode itself is deliberately NOT persisted: it is a state you enter,
  * rearrange in, and leave through the floating SAVE LAYOUT button — the
  * saved rectangles are what persist.
  */
 export default function CustomizePanel({
-  cdVisible,
   lyricsCustom,
   onLyricsCustom,
   queueSaved,
   onResetQueue,
   musicSaved,
   onResetMusic,
-  discSaved,
-  onResetDisc,
   carouselSaved,
   onResetCarousel,
   lyricsEnabled,
@@ -112,12 +102,11 @@ export default function CustomizePanel({
       {/* ---- lyrics ---- */}
       <div className="mb-1 flex items-center justify-between">
         <span className="font-mono text-[8px] tracking-[0.2em] text-white/35">LYRICS</span>
-        {lyricsEnabled && <span className="font-mono text-[8px] text-white/30">SAVES: CD {cdVisible ? 'ON' : 'OFF'}</span>}
+        {lyricsEnabled && <span className="font-mono text-[8px] text-white/30">SAVED RECTANGLE</span>}
       </div>
       <div className="mb-1.5 grid grid-cols-1 gap-1.5">
-        {/* the moved toggle — with the CD on and off needing different spots,
-            editing (not this toggle) is what rearranges: it saves into the
-            rectangle belonging to whichever CD state is live */}
+        {/* the moved toggle — editing (not this toggle) is what rearranges:
+            it saves into the rectangle the lyrics own */}
         <button
           onClick={() => onLyricsCustom(!lyricsCustom)}
           disabled={!lyricsEnabled || editChrome}
@@ -128,7 +117,7 @@ export default function CustomizePanel({
               : editChrome
                 ? 'Editing now — finish with SAVE LAYOUT'
                 : lyricsCustom
-                  ? 'Back to the standard disc/stage positions'
+                  ? 'Back to the standard stage position'
                   : 'Let the lyrics keep their own saved position'
           }
           className={`flex items-center justify-center gap-1.5 rounded-lg py-1.5 font-mono text-[8px] tracking-[0.1em] transition disabled:opacity-40 ${
@@ -174,26 +163,6 @@ export default function CustomizePanel({
           disabled={!musicSaved}
           title="Drop the saved player position and dock it back"
           aria-label="Reset player layout"
-          className="grid w-9 place-items-center rounded-lg bg-white/5 py-1.5 text-white/50 transition hover:bg-white/10 hover:text-white disabled:opacity-30"
-        >
-          <RotateCcw size={10} />
-        </button>
-      </div>
-
-      {/* ---- disc (and the on-disc lyrics that travel with it) ---- */}
-      <div className="mb-1 flex items-center justify-between">
-        <span className="font-mono text-[8px] tracking-[0.2em] text-white/35">CD</span>
-        <span className="font-mono text-[8px] text-white/30">{discSaved ? 'SAVED' : 'IN STAGE'}</span>
-      </div>
-      <div className="mb-3 flex items-center justify-between gap-1.5 rounded-lg bg-white/[0.03] px-2 py-1.5">
-        <span className="font-mono text-[7px] leading-relaxed tracking-[0.12em] text-white/30">
-          MOVE THE CD — LYRICS FOLLOW
-        </span>
-        <button
-          onClick={onResetDisc}
-          disabled={!discSaved}
-          title="Drop the saved CD position and dock it back into the stage"
-          aria-label="Reset CD layout"
           className="grid w-9 place-items-center rounded-lg bg-white/5 py-1.5 text-white/50 transition hover:bg-white/10 hover:text-white disabled:opacity-30"
         >
           <RotateCcw size={10} />

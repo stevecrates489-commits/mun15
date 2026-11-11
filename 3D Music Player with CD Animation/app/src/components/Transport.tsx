@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react'
-import { Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Shuffle, Repeat, Repeat1, Heart, SlidersHorizontal, Radio } from 'lucide-react'
+import { Play, Pause, SkipBack, SkipForward, Volume2, VolumeX, Shuffle, Repeat, Repeat1, Heart, Radio } from 'lucide-react'
 import { fmt } from '../features/playlist/usePlaylist'
 import { type RepeatMode, type SubscribeTime } from '../hooks/useAudioEngine'
 
@@ -27,8 +27,6 @@ export default function Transport({
   onRadioHoldEnd,
   onRadioHoldLeave,
   onRadioClick,
-  cdSettingsOpen,
-  onToggleCdSettings,
   wallSettingsOpen,
   onToggleWallSettings,
 }: {
@@ -48,7 +46,7 @@ export default function Transport({
   onCycleRepeat: () => void
   onSetVolume: (v: number) => void
   onSeekTo: (t: number) => void
-  /** the three settings/destination toggles that used to float alone on the
+  /** the settings/destination toggles that used to float alone on the
       stage — they live in the transport row now so they scale with the panel */
   radioOn: boolean
   radioLive: boolean
@@ -57,8 +55,6 @@ export default function Transport({
   onRadioHoldLeave: () => void
   /** plain click on the radio button (edit mode's hold-free path) */
   onRadioClick: () => void
-  cdSettingsOpen: boolean
-  onToggleCdSettings: () => void
   wallSettingsOpen: boolean
   onToggleWallSettings: () => void
 }) {
@@ -171,8 +167,8 @@ export default function Transport({
         <ModeButton active={favourite} onClick={onToggleFavourite} label={favourite ? 'Remove from favourites' : 'Add to favourites'} fav>
           <Heart size={14} className={favourite ? 'fill-current' : ''} />
         </ModeButton>
-        {/* the three stage toggles that used to float alone — radio (hold),
-            CD settings and wallpaper settings now scale with this panel */}
+        {/* the two stage toggles that used to float alone — radio (hold) and
+            wallpaper settings now scale with this panel */}
         <ModeButton active={radioOn} onClick={onRadioClick} label="Radio — hold to open" onHoldStart={onRadioHoldStart} onHoldEnd={onRadioHoldEnd} onHoldLeave={onRadioHoldLeave}>
           <span className="relative grid place-items-center">
             <Radio size={13} />
@@ -180,9 +176,6 @@ export default function Transport({
               <span className="absolute -right-1.5 -top-1.5 h-2 w-2 animate-blink rounded-full bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.9)]" />
             )}
           </span>
-        </ModeButton>
-        <ModeButton active={cdSettingsOpen} onClick={onToggleCdSettings} label="CD settings">
-          <SlidersHorizontal size={13} />
         </ModeButton>
         <ModeButton active={wallSettingsOpen} onClick={onToggleWallSettings} label="Wallpaper settings">
           <svg viewBox="0 0 24 24" width={14} height={14} fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>

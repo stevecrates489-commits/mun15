@@ -1,6 +1,13 @@
+/* ============================================================================
+ * ARCHIVED — the CD is gone from the player.
+ *
+ * Nothing outside `src/archived/` imports this file, so it is tree-shaken out
+ * of the bundle and never reaches the screen. It is kept so the feature can
+ * come back without being rewritten. See ./README.md for the restore steps.
+ * ========================================================================== */
 import { useEffect, useLayoutEffect, useRef } from 'react'
-import discUrl from '../assets/disc.png'
-import chromeUrl from '../assets/chrome.png'
+import discUrl from './assets/disc.png'
+import chromeUrl from './assets/chrome.png'
 
 interface Props {
   playing: boolean

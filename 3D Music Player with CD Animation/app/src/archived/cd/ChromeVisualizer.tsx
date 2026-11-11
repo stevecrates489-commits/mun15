@@ -1,3 +1,10 @@
+/* ============================================================================
+ * ARCHIVED — the CD is gone from the player.
+ *
+ * Nothing outside `src/archived/` imports this file, so it is tree-shaken out
+ * of the bundle and never reaches the screen. It is kept so the feature can
+ * come back without being rewritten. See ./README.md for the restore steps.
+ * ========================================================================== */
 import { useEffect, useRef } from 'react'
 
 interface Props {

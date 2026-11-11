@@ -1,6 +1,6 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Play, X, Check, Maximize, Minimize, ImagePlus, SlidersHorizontal, Mic2, Settings2, Pin, PinOff, Puzzle } from 'lucide-react'
-import { useLyrics, type LyricsMode } from '../features/lyrics/useLyrics'
+import { useLyrics } from '../features/lyrics/useLyrics'
 import { useLayoutBox, clampBox, clampLoose, type LayoutBox } from '../features/layout/useLayoutBox'
 import { useRadio, getRadioElement } from '../features/radio/useRadio'
 import { loadLocalLyrics, saveLocalLyrics, deleteLocalLyrics, loadTrackOffset, saveTrackOffset, deleteTrackOffset, type LocalLyrics } from '../lib/library'
@@ -9,17 +9,11 @@ import { getCurrentWindow, currentMonitor, PhysicalSize, PhysicalPosition } from
 import { useAudioEngine, type Track } from '../hooks/useAudioEngine'
 import { usePlaylist, openFilePicker, filesFromDrop } from '../features/playlist/usePlaylist'
 import { useWallpaper, THEMES, AURORA_BG, AURORA_BAND_BG } from '../features/wallpaper/useWallpaper'
-import { useDiscArt } from '../features/disc/useDiscArt'
-import { analyze } from 'web-audio-beat-detector'
 import { ensureEyeEngine } from '../lib/eyeEngine'
 import { signalBootReady } from '../lib/bootGate'
 import { cleanTitle } from '../lib/utils'
 import { useAccentFromArt } from '../lib/useAccent'
 import { safeMode } from '../lib/safeMode'
-import discUrl from '../assets/disc.png'
-import chromeUrl from '../assets/chrome.png'
-import DiscCase from '../components/DiscCase'
-import ChromeVisualizer from '../components/ChromeVisualizer'
 import CreatorMenu from '../components/CreatorMenu'
 import PlaylistPanel from '../components/PlaylistPanel'
 import type { TrackSort } from '../components/PlaylistPanel'
@@ -27,7 +21,6 @@ import QueuePanel from '../components/QueuePanel'
 import MusicControlPanel from '../components/MusicControlPanel'
 import CylinderCarousel from '../components/CylinderCarousel'
 import PerfMeters from '../components/PerfMeters'
-import CdSettingsPanel from '../components/CdSettingsPanel'
 import TrackMetaEditor from '../components/TrackMetaEditor'
 import RadioPanel from '../components/RadioPanel'
 import VisualizerPanel from '../components/VisualizerPanel'
@@ -54,9 +47,6 @@ import { usePlaylists, DOWNLOADS_FOLDER_ID } from '../features/playlist/usePlayl
 
 /* heavy subtrees re-render only when their own props change — the
    timeupdate-driven re-renders stop at the memo boundary */
-const DiscCaseMemo = memo(DiscCase)
-const ChromeVisualizerMemo = memo(ChromeVisualizer)
-
 type AudioEngine = ReturnType<typeof useAudioEngine>
 
 export default function Home() {
@@ -66,7 +56,6 @@ export default function Home() {
   const playlist = usePlaylist(engRef)
   const eng = useAudioEngine(playlist.tracks)
   const wall = useWallpaper({ setImportHint: playlist.setImportHint })
-  const discArt = useDiscArt()
   const lyrics = useLyrics()
   const playlists = usePlaylists()
   /* the live backdrop picked from the visualiser panel — a VoltViz style,
@@ -467,21 +456,10 @@ export default function Home() {
     engRef.current = eng
   }, [eng])
 
-  /* the boot gate holds its exit on these — art decoded, fonts swapped and
-     the audio graph built BEFORE the shutters reveal the player, so the
-     first visible frame is already smooth instead of warming up */
+  /* the boot gate holds its exit on these — fonts swapped and the audio graph
+     built BEFORE the shutters reveal the player, so the first visible frame is
+     already smooth instead of warming up */
   useEffect(() => {
-    const decode = (src: string) =>
-      new Promise<void>((res) => {
-        const img = new Image()
-        img.onload = () => {
-          const p = img.decode?.()
-          if (p) p.then(() => res(), () => res())
-          else res()
-        }
-        img.onerror = () => res()
-        img.src = src
-      })
     const fontsReady = async () => {
       try {
         /* explicit loads first — bare fonts.ready can resolve before the
@@ -494,11 +472,11 @@ export default function Home() {
         /* offline / blocked — reveal with fallbacks rather than hang */
       }
     }
-    /* neither a decode nor `document.fonts.load` rejects when it stalls — the
-       font stylesheet can sit pending for as long as the network takes, and
-       the boot gate would wait on it. The watchdog opens the gate anyway. */
+    /* `document.fonts.load` does not reject when it stalls — the font
+       stylesheet can sit pending for as long as the network takes, and the
+       boot gate would wait on it. The watchdog opens the gate anyway. */
     const assetWatchdog = window.setTimeout(() => signalBootReady('assets'), 3500)
-    void Promise.all([decode(discUrl), decode(chromeUrl), fontsReady()])
+    void Promise.all([fontsReady()])
       .catch(() => {})
       .finally(() => {
         window.clearTimeout(assetWatchdog)
@@ -550,54 +528,16 @@ export default function Home() {
   }, [])
   const closeMetaEdit = useCallback(() => setMetaEdit(null), [])
   /* ONLY real file drags (from Explorer/Finder) may open the drop overlay.
-     Playlist rows are HTML5-draggable for reordering, and long-pressing the
-     CD art or selecting text also starts native drags — all of those used to
-     hijack the window with the "DROP AUDIO FILES" overlay and swallow the
-     drop. `Files` in dataTransfer.types is true only for OS file drags. */
+     Playlist rows are HTML5-draggable for reordering, and selecting text
+     also starts native drags — all of those used to hijack the window with
+     the "DROP AUDIO FILES" overlay and swallow the drop. `Files` in
+     dataTransfer.types is true only for OS file drags. */
   const isFileDrag = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes('Files')
 
-  /* the CD's rainbow sheens always run reactive — the DEFAULT/MUSIC-REACTIVE
-     switch was removed from settings because both modes drew the same layers
-     and the only difference was whether their hue-rotate chased the bass. */
-  const cdReactive = true
-  const [cdVisible, setCdVisibleState] = useState(() => localStorage.getItem('md-cd-visible') !== '0')
-  const setCdVisible = useCallback((on: boolean) => {
-    setCdVisibleState(on)
-    localStorage.setItem('md-cd-visible', on ? '1' : '0')
-  }, [])
-  /* CD assembly brightness — lives on the stage wrapper (case + halo) as a
-     filter applied ONLY when ≠100, so the default path pays nothing; kept
-     off the case's 3D tree so the chrome arms keep their z-depth */
-  const [cdBrightness, setCdBrightnessState] = useState(() => {
-    const n = Number(localStorage.getItem('md-cd-brightness'))
-    return Number.isFinite(n) && n >= 40 && n <= 150 ? n : 100
-  })
-  const setCdBrightness = useCallback((v: number) => {
-    setCdBrightnessState(v)
-    localStorage.setItem('md-cd-brightness', String(v))
-  }, [])
-  /* disc rotation multiplier — 0 parks the disc, 1 is the natural BPM cruise,
-     2 doubles it. Compressed to one row of presets (no slider: the disc's
-     speed is already sampled from BPM, so a fine slider is wasted steps) */
-  const DISC_SPEEDS = [0, 0.25, 0.5, 0.75, 1, 1.5, 2]
-  const [cdSpeed, setCdSpeedState] = useState(() => {
-    const n = Number(localStorage.getItem('md-cd-speed'))
-    return DISC_SPEEDS.includes(n) ? n : 1
-  })
-  const setCdSpeed = useCallback((v: number) => {
-    setCdSpeedState(v)
-    localStorage.setItem('md-cd-speed', String(v))
-  }, [])
-  const [discBpmEntry, setDiscBpmEntry] = useState<{ src: string; bpm: number } | null>(null)
-  const [cdSettingsOpen, setCdSettingsOpen] = useState(false)
-  /* settings panel exit: keep mounted ~160ms while the close animation plays */
-  const [cdSettingsClosing, setCdSettingsClosing] = useState(false)
-
   /* ---- lyrics ----
-     `lyricMode` resolves the live position: two of the three sit on or beside
-     the disc and only apply while it is shown, and with the CD hidden the stage
-     box is the only thing left to fill, so that one takes over by itself. */
-  const lyricMode: LyricsMode = cdVisible ? lyrics.align : 'stage'
+     One panel, one place. The disc is gone, so the disc-relative positions
+     went with it: the lyrics own the stage box, centred, and they keep one
+     movable rectangle of their own for the layout editor. */
   const [lyricsSettingsOpen, setLyricsSettingsOpen] = useState(false)
   const [lyricsSettingsClosing, setLyricsSettingsClosing] = useState(false)
   /* where the gear was when pressed — the panel opens at it, not at a fixed
@@ -608,8 +548,7 @@ export default function Home() {
   /* ---- the customize hub + layout editing ----
      Edit sessions are TRANSIENT: enter from the Customize panel, drag/resize,
      leave through the floating SAVE LAYOUT button. What persists is the saved
-     rectangle (per panel; the lyrics keep one per CD state), not the edit
-     state itself. */
+     rectangle (per panel), not the edit state itself. */
   const [customizeOpen, setCustomizeOpen] = useState(false)
   const [customizeClosing, setCustomizeClosing] = useState(false)
   const [customizePos, setCustomizePos] = useState<{ x: number; y: number } | null>(null)
@@ -642,32 +581,6 @@ export default function Home() {
      editable, and SAVE LAYOUT is the only way out. */
   const isEditingLayout = editChrome
 
-  /* hide/show the whole CD assembly (disc + chrome arms + case + sheens) —
-     a viewing preference, persisted like the other cd settings */
-  /* every keyboard shortcut, offable in one switch */
-  const [shortcuts, setShortcutsState] = useState(() => localStorage.getItem('md-shortcuts') !== '0')
-  const setShortcuts = useCallback((on: boolean) => {
-    setShortcutsState(on)
-    localStorage.setItem('md-shortcuts', on ? '1' : '0')
-  }, [])
-  /* where the disc's face art comes from right now — one derivation feeds both
-     the disc and the CD settings readout, so they can never disagree */
-  const discArtSource: 'playlist' | 'track' | 'custom' | 'stock' =
-    discArt.playlistArt && selectedFolder?.image
-      ? 'playlist'
-      : discArt.trackArt && track.cover
-        ? 'track'
-        : discArt.url
-          ? 'custom'
-          : 'stock'
-  const activeDiscArt =
-    discArtSource === 'playlist'
-      ? selectedFolder?.image ?? null
-      : discArtSource === 'track'
-        ? track.cover ?? null
-        : discArtSource === 'custom'
-          ? discArt.url
-          : null
   const [radioOpen, setRadioOpen] = useState(false)
   /* long-press bookkeeping for the radio trigger */
   const holdTimerRef = useRef(0)
@@ -905,11 +818,10 @@ export default function Home() {
   const lyricsApiRef = useRef<import('../components/LyricsPanel').LyricsApi | null>(null)
 
   /* ---- layout editor wiring ----
-     The lyrics rectangle follows the CD: metallic on and white off get their
-     own saved box (the legacy single-box key migrates into the CD-on slot),
-     because the words read best in different places depending on whether the
-     disc is there to share the stage. The QUEUE PANEL keeps one box — it
-     replaced the old tracklist as the single surface. */
+     Every movable surface keeps ONE rectangle of its own. The lyrics keep
+     theirs too — the words are movable, and they read best in different
+     places depending on what else is on screen. The QUEUE PANEL keeps one box
+     — it replaced the old tracklist as the single surface. */
   const queueLayout = useLayoutBox('md-queue-box')
   /* the setters are stable callbacks; destructured so the handlers below can
      depend on them (not on the hook's fresh-every-render return object) */
@@ -921,13 +833,6 @@ export default function Home() {
   const [musicSeed, setMusicSeed] = useState<LayoutBox | null>(null)
   const musicPanelRef = useRef<HTMLDivElement>(null)
   const musicFramed = editChrome || !!musicBox
-  /* the disc itself is a layout surface too — moving / resizing it uses the
-     same editor as the panels, so the whole deck can be arranged by hand */
-  const discLayout = useLayoutBox('md-disc-box')
-  const { box: discBox, setBox: discSetBox } = discLayout
-  const [discSeed, setDiscSeed] = useState<LayoutBox | null>(null)
-  const discPanelRef = useRef<HTMLDivElement>(null)
-  const discFramed = editChrome || !!discBox
   /* the cylinder widget above the player controls — its own layout surface,
      so edit mode can move/resize it like every other panel */
   const carouselLayout = useLayoutBox('md-cylinder-box')
@@ -936,7 +841,7 @@ export default function Home() {
   const carouselPanelRef = useRef<HTMLDivElement>(null)
   const carouselFramed = editChrome || !!carouselBox
   const [carouselFocus, setCarouselFocus] = useState(0)
-  const { setBoxOn, setBoxOff, setCustom: setLyricsCustom } = lyrics
+  const { setBox: setLyricBox, setCustom: setLyricsCustom } = lyrics
   /* the queue panel's natural rectangle, measured the instant edit mode was
      requested (while the panel is still docked at its screen edge) — the
      starting box for a first-ever edit. A hidden (slid-away) panel reads as
@@ -959,13 +864,12 @@ export default function Home() {
      copy in the overlay and a transformed ghost in the frame.) */
   const lyricsFramed = lyrics.custom || editChrome
 
-  const lyricBox = cdVisible ? lyrics.boxOn : lyrics.boxOff
+  const lyricBox = lyrics.box
   const commitLyricBox = useCallback(
     (b: LayoutBox) => {
-      if (cdVisible) setBoxOn(b)
-      else setBoxOff(b)
+      setLyricBox(b)
     },
-    [cdVisible, setBoxOn, setBoxOff],
+    [setLyricBox],
   )
 
   /* while an edit session runs the body carries `layout-editing` (index.css):
@@ -1001,11 +905,9 @@ export default function Home() {
          saved oversized rectangle must not be clamped back to the viewport */
       const remapLoose = (b: LayoutBox) =>
         clampLoose({ x: b.x * sx, y: b.y * sy, w: b.w * sx, h: b.h * sy })
-      if (lyrics.boxOn) setBoxOn(remapBox(lyrics.boxOn))
-      if (lyrics.boxOff) setBoxOff(remapBox(lyrics.boxOff))
+      if (lyrics.box) setLyricBox(remapBox(lyrics.box))
       if (queueBox) queueSetBox(remapBox(queueBox))
       if (musicBox) musicSetBox(remapBox(musicBox))
-      if (discBox) discSetBox(remapBox(discBox))
       if (carouselBox) carouselSetBox(remapLoose(carouselBox))
       /* the chrome surfaces are offset from their own CSS anchors, so their
          offsets scale with the viewport instead of staying in old pixels */
@@ -1017,7 +919,7 @@ export default function Home() {
       window.removeEventListener('resize', remap)
       document.removeEventListener('fullscreenchange', remap)
     }
-  }, [setBoxOn, setBoxOff, queueSetBox, lyrics.boxOn, lyrics.boxOff, queueBox, musicBox, musicSetBox, discBox, discSetBox, carouselBox, carouselSetBox, chromeScale])
+  }, [setLyricBox, queueSetBox, lyrics.box, queueBox, musicBox, musicSetBox, carouselBox, carouselSetBox, chromeScale])
 
   /* Entering the one edit mode owns every panel. The lyrics switch to their
      custom frame (there is no standard-position handle to drag), and the
@@ -1045,14 +947,6 @@ export default function Home() {
             musicSetBox(seed)
           }
         }
-        if (!discBox) {
-          const r = discPanelRef.current?.getBoundingClientRect()
-          if (r && r.width > 0 && r.height > 0) {
-            const seed = clampBox({ x: r.x, y: r.y, w: r.width, h: r.height })
-            setDiscSeed(seed)
-            discSetBox(seed)
-          }
-        }
         if (!carouselBox) {
           const r = carouselPanelRef.current?.getBoundingClientRect()
           if (r && r.width > 0 && r.height > 0) {
@@ -1064,12 +958,11 @@ export default function Home() {
       } else {
         setQueueSeed(null)
         setMusicSeed(null)
-        setDiscSeed(null)
         setCarouselSeed(null)
       }
       setEditChrome(on)
     },
-    [setLyricsCustom, queueBox, queueSetBox, musicBox, musicSetBox, discBox, discSetBox, carouselBox, carouselSetBox],
+    [setLyricsCustom, queueBox, queueSetBox, musicBox, musicSetBox, carouselBox, carouselSetBox],
   )
 
   /* the SAVE LAYOUT button: the rectangle was already committed on the last
@@ -1079,7 +972,6 @@ export default function Home() {
     setEditChrome(false)
     setQueueSeed(null)
     setMusicSeed(null)
-    setDiscSeed(null)
     setCarouselSeed(null)
   }, [])
 
@@ -1092,13 +984,6 @@ export default function Home() {
     musicSetBox(null)
     setMusicSeed(null)
   }, [musicSetBox])
-
-  /* RESET CD: drop the disc's saved rectangle and let it dock back into the
-     stage — the lyrics go with it, because both are one assembly again. */
-  const resetDiscLayout = useCallback(() => {
-    discSetBox(null)
-    setDiscSeed(null)
-  }, [discSetBox])
 
   const resetCarouselLayout = useCallback(() => {
     carouselSetBox(null)
@@ -1192,68 +1077,6 @@ export default function Home() {
     setLyricOffset(0)
     setLocalLyrics(null)
   }, [trackId])
-
-  const toggleCdSettings = useCallback(() => {
-    if (cdSettingsOpen) {
-      setCdSettingsClosing(true)
-      return
-    }
-    setCdSettingsClosing(false)
-    setCdSettingsOpen(true)
-  }, [cdSettingsOpen])
-  const onCdSettingsClosed = useCallback(() => {
-    setCdSettingsOpen(false)
-    setCdSettingsClosing(false)
-  }, [])
-  const bpmCacheRef = useRef<Map<string, number>>(new Map())
-  const bpmGenRef = useRef(0)
-  /* derived, never set synchronously inside an effect: a track switch shows
-     "no bpm" instantly (mismatched src → null) while the cached/analyzed
-     value for the CURRENT track lands whenever it is ready */
-  const discBpm = discBpmEntry && track.src === discBpmEntry.src ? discBpmEntry.bpm : null
-
-  /* bpm → disc speed: analyze each track once, cache by source.
-     gated on playback — paused browsing must never fetch+decode a file */
-  useEffect(() => {
-    const src = track.src
-    if (!src) return
-    const cached = bpmCacheRef.current.get(src)
-    if (cached) {
-      /* deferred by a tick on purpose: a synchronous setState here is exactly
-         what react-hooks/set-state-in-effect flags */
-      const t = window.setTimeout(() => setDiscBpmEntry({ src, bpm: cached }), 0)
-      return () => window.clearTimeout(t)
-    }
-    if (!eng.playing) return
-    const gen = ++bpmGenRef.current
-    /* deferred: the track transition stays butter-smooth, analysis lands later;
-       then idle-gated again — decode + analyze are hundreds of ms of pure CPU
-       and must never collide with the intro reveal or a disc interaction */
-    const timer = window.setTimeout(() => {
-      const run = async () => {
-        try {
-          const buf = await fetch(src).then((r) => r.arrayBuffer())
-          if (gen !== bpmGenRef.current) return
-          /* decode at 22050Hz — half the data, same BPM accuracy */
-          const offline = new OfflineAudioContext(1, 1, 22050)
-          const audioBuf = await offline.decodeAudioData(buf)
-          if (gen !== bpmGenRef.current) return
-          const bpm = await analyze(audioBuf)
-          if (gen !== bpmGenRef.current) return
-          const rounded = Math.max(60, Math.round(bpm))
-          bpmCacheRef.current.set(src, rounded)
-          setDiscBpmEntry({ src, bpm: rounded })
-        } catch {
-          /* bpm unknown — the disc keeps its default cruise speed */
-        }
-      }
-      window.requestIdleCallback(() => void run(), { timeout: 3000 })
-    }, 3500)
-    return () => {
-      bpmGenRef.current++
-      window.clearTimeout(timer)
-    }
-  }, [track.src, eng.playing])
 
   /* hard-refresh flag: Ctrl+Shift+R arms the wipe for the NEXT boot —
      lib/bootReset.ts runs it at module load, before any state initializes */
@@ -1524,7 +1347,7 @@ export default function Home() {
      physical press, otherwise volume/seek/next can trigger dozens of times from
      one hold and the whole UI stutters behind the burst.
 
-     The whole set can be switched off in CD settings. */
+     The whole set can be switched off in the player settings card. */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       /* a key landing in a text field belongs to that field, never to the
@@ -1541,27 +1364,16 @@ export default function Home() {
       const mod = e.ctrlKey || e.metaKey
       const plus = e.code === 'Equal' || e.code === 'NumpadAdd'
 
-      /* Ctrl+"+" — add music. Ctrl+Shift+"+" — upload wallpaper. Ctrl+W —
-         upload CD art. Checked before the plain-key actions because they share
-         a physical key. */
+      /* Ctrl+"+" — add music. Ctrl+Shift+"+" — upload wallpaper. Checked
+         before the plain-key actions because they share a physical key. */
       if (mod && plus) {
         e.preventDefault()
         if (e.shiftKey) openFilePicker(wall.wallInputRef.current)
         else playlist.openAudioPicker()
         return
       }
-      if (mod && e.code === 'KeyW') {
-        e.preventDefault()
-        discArt.inputRef.current?.click()
-        return
-      }
 
-      /* Alt+C — toggle the CD. Alt+L — toggle lyrics. */
-      if (e.altKey && e.code === 'KeyC') {
-        e.preventDefault()
-        setCdVisible(!cdVisible)
-        return
-      }
+      /* Alt+L — toggle lyrics. */
       if (e.altKey && e.code === 'KeyL') {
         e.preventDefault()
         lyrics.toggle()
@@ -1611,12 +1423,9 @@ export default function Home() {
   }, [
     toggleFullscreen,
     isFullscreen,
-    setCdVisible,
-    cdVisible,
     lyrics,
     wall,
     playlist,
-    discArt,
     volt.style,
     stepVisible,
   ])
@@ -1641,41 +1450,17 @@ export default function Home() {
       playing={radio.song ? radio.playing : eng.playing}
       getTime={radio.song ? radio.getSongTime : eng.getCurrentTime}
       onSeek={eng.seekTo}
-      size={lyricMode === 'stage' ? Math.min(56, lyrics.size + 12) : lyrics.size}
-      mode={lyricMode}
+      size={Math.min(56, lyrics.size + 12)}
       brightness={lyrics.brightness}
       offset={radio.song ? radio.lead : lyricOffset}
       ttml={radio.song ? radio.song.ttml || null : (localLyrics?.ttml ?? null)}
-      /* the metallic face, by strict rule: ONLY a PINNED lyric while the CD
-         is on the stage wears it. CD off forces white no matter what is
-         pinned (the metal must never bleed onto the bare stage), and an
-         unpinned lyric is always plain white even over the disc. The radio's
-         own lyrics never wear metal — they are fetched, not pinned. */
-      metal={cdVisible && !!localLyrics && !radio.song}
+      /* the metallic face, by strict rule: a PINNED lyric wears it, an
+         unpinned one is always plain white. The radio's own lyrics never wear
+         metal — they are fetched, not pinned. */
+      metal={!!localLyrics && !radio.song}
       apiRef={lyricsApiRef}
     />
   )
-
-  /* The on-disc / beside-disc words belong to the DISC, not to the stage box.
-     They are rendered inside `discAssembly` so moving or resizing the disc in
-     the layout editor carries the lyrics with it — the two are one object.
-     CUSTOM POSITION still owns its own fixed frame, which replaces this. */
-  const discLyricsOverlay =
-    lyrics.enabled && !lyricsFramed && lyricMode !== 'stage' && (allTracks.length > 0 || radio.song) ? (
-      <div
-        className={`lyrics-overlay pointer-events-none absolute inset-0 z-[60] flex items-center ${
-          lyricMode === 'disc-right' ? 'justify-end' : 'justify-start'
-        }`}
-      >
-        <div
-          className={`pointer-events-auto ${
-            lyricMode === 'disc-right' ? 'h-[62%] w-[52%] pl-7 pr-[2%]' : 'h-[72%] w-[78%] pl-[9%] pr-2'
-          }`}
-        >
-          {lyricsPanel}
-        </div>
-      </div>
-    ) : null
 
   /* the music control panel — one definition, docked in the deck column or
      living in its LayoutFrame when a rectangle is saved (see musicFramed).
@@ -1724,8 +1509,6 @@ export default function Home() {
       onRadioHoldEnd={radioHoldEnd}
       onRadioHoldLeave={radioHoldLeave}
       onRadioClick={radioClickOpen}
-      cdSettingsOpen={cdSettingsOpen}
-      onToggleCdSettings={toggleCdSettings}
       wallSettingsOpen={wall.wallSettingsOpen}
       onToggleWallSettings={wall.toggleWallSettings}
     />
@@ -1752,44 +1535,6 @@ export default function Home() {
       onToggle={togglePlayback}
     />
   )
-
-  /* the disc assembly, shared by the stage and its layout frame — the halo
-     belongs to the disc, so moving the disc takes its glow with it */
-  const discAssembly = cdVisible ? (
-    <div ref={discPanelRef} className="relative h-full w-full">
-      <ChromeVisualizerMemo getAnalyser={eng.getAnalyser} playing={eng.playing} />
-      {/* brightness filters ONLY the CD — on the stage it also swallowed the
-          visualiser canvas, forcing the whole filtered layer to re-raster on
-          every canvas frame (the CD's stutter source) */}
-      <div
-        style={cdBrightness !== 100 ? { filter: `brightness(${cdBrightness / 100})` } : undefined}
-      >
-        <DiscCaseMemo
-          playing={eng.playing}
-          onToggle={togglePlayback}
-          onScratch={eng.seekBy}
-          cover={track.cover ?? null}
-          bpm={discBpm}
-          analyser={eng.getAnalyser}
-          reactive={cdReactive}
-          /* the face resolves: playlist poster (PLAYLIST COVER), track cover
-             (TRACK COVER), the uploaded label, then the stock disc. The
-             upload is the DEFAULT, not a mode. */
-          discArt={activeDiscArt}
-          /* a track cover needs the hub hole to read as a disc; printed
-             faces keep their own centres */
-          hubHole={discArtSource === 'track'}
-          /* beats on the track id so a shared cover still gets the exchange,
-             but only when the cover is what is actually on the platter */
-          faceKey={track.id}
-          swapEnabled={discArtSource === 'track'}
-          speedScale={cdSpeed}
-          frosted={wall.theme === 'custom' && !!wall.wallpaper}
-        />
-      </div>
-      {discLyricsOverlay}
-    </div>
-  ) : null
 
   /* the tracklist element, shared by its two homes: docked in the deck column
      (the standard layout) and the layout-editor frame (its saved rectangle).
@@ -1988,16 +1733,6 @@ export default function Home() {
         className="hidden"
         onChange={(e) => {
           void playlist.importM3u(e.target.files?.[0])
-          e.target.value = ''
-        }}
-      />
-      <input
-        ref={discArt.inputRef}
-        type="file"
-        accept="image/*"
-        className="hidden"
-        onChange={(e) => {
-          void discArt.pick(e.target.files?.[0])
           e.target.value = ''
         }}
       />
@@ -2506,49 +2241,27 @@ export default function Home() {
       <main className="relative z-30 mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col items-center justify-center gap-8 px-5 py-4 lg:flex-row lg:gap-14">
         {/* player stage — nudged left on wide screens, playlist stays put.
             With lyrics on it slides a little further left so the overlay sits
-            clear of the deck. `aspect-square` is layout-neutral while the CD is
-            shown (its own box is already 1:1) but keeps the stage a real box
-            when the CD is hidden, which is what the stage-mode lyrics fill */}
+            clear of the deck. `aspect-square` keeps the stage a real box for
+            the lyrics to fill. */}
         <div
           data-stage
           className={`relative aspect-square w-[min(78vw,500px)] shrink-0 transition-transform duration-700 ease-[cubic-bezier(.22,1,.36,1)] lg:-translate-x-12 ${
             lyrics.enabled ? 'lg:-translate-x-24' : ''
           }`}
         >
-          {/* the disc — docked in the stage until the layout editor gives it
-              a rectangle of its own (md-disc-box) */}
-          {!discFramed && discAssembly}
-
-          {/* lyrics — one of three positions.
-
-              ON DISC      words lie over the disc's left half, as a spooling
-                           label. Left-aligned, small.
-              BESIDE DISC   the column to the disc's right, mostly clear of it,
-                           so the artwork stays fully visible.
-              STAGE         the CD is hidden: the whole stage box is the
-                           showcase, and the text is bigger and centred.
-
-              With the CD on the user picks between the first two; with it off
-              the third takes over by itself (there is nothing else to fill the
-              box). Sits above EVERYTHING in the case — the sheens and the
-              chrome tribal frame included — because the words must stay
-              readable over the artwork.
+          {/* the lyrics — ONE panel, ONE position: the stage box. The whole
+              box is the showcase and the text is centred in it.
 
               The wrapper is click-through and only the text takes pointer
-              events, so the disc can still be played / scratched around it.
-              Unmounted while off on purpose: a mounted element fetches lyrics
-              for the current track even when nobody is looking.
+              events. Unmounted while off on purpose: a mounted element fetches
+              lyrics for the current track even when nobody is looking.
 
               The library is no longer the only thing that can have lyrics: a
               radio station announces its own songs, and those are the ones
               with a clock worth following. So the panel also opens for a
               detected radio song — otherwise a listener with an empty
               library would never see the highlight at all. */}
-          {/* with the CD hidden there is no disc to carry the words, so the
-              stage box takes over. On/beside-disc words now live inside the
-              disc assembly (see discLyricsOverlay), which is what keeps them
-              attached when the disc itself is moved. */}
-          {lyrics.enabled && !lyricsFramed && lyricMode === 'stage' && (allTracks.length > 0 || radio.song) && (
+          {lyrics.enabled && !lyricsFramed && (allTracks.length > 0 || radio.song) && (
             <div className="lyrics-overlay pointer-events-none absolute inset-0 z-[60] flex items-center justify-start">
               <div className="pointer-events-auto h-[78%] w-[92%] px-4">{lyricsPanel}</div>
             </div>
@@ -2602,43 +2315,9 @@ export default function Home() {
         />
       )}
 
-      {/* cd settings + radio toggles now live INSIDE the player panel's
-          transport row, so they scale with it in the layout editor — nothing
-          floats on the stage for them any more */}
-
-      {cdSettingsOpen && (
-        <CdSettingsPanel
-          cdVisible={cdVisible}
-          editing={isEditingLayout}
-          offset={chromeLayout.offsets['panel-cd']}
-          onOffset={(o) => chromeLayout.setOffset('panel-cd', o)}
-          onCdVisible={setCdVisible}
-          cdBrightness={cdBrightness}
-          onCdBrightness={setCdBrightness}
-          discArtCustom={!!discArt.url}
-          discArtBusy={discArt.busy}
-          discArtSource={discArtSource}
-          trackArt={discArt.trackArt}
-          onTrackArt={discArt.setTrackArt}
-          playlistArt={discArt.playlistArt}
-          onPlaylistArt={discArt.setPlaylistArt}
-          discArtNote={discArt.pressNote}
-          onDiscArtPick={() => openFilePicker(discArt.inputRef.current)}
-          onDiscArtReset={() => void discArt.reset()}
-          collection={discArt.collection}
-          onApplyArt={(id) => void discArt.applyFromCollection(id)}
-          onDeleteArt={(id) => void discArt.removeFromCollection(id)}
-          onClearArt={() => void discArt.clearCollection()}
-          cdSpeed={cdSpeed}
-          speeds={DISC_SPEEDS}
-          onCdSpeed={setCdSpeed}
-          shortcuts={shortcuts}
-          onShortcuts={setShortcuts}
-          onClose={() => setCdSettingsClosing(true)}
-          closing={cdSettingsClosing}
-          onClosed={onCdSettingsClosed}
-        />
-      )}
+      {/* the radio + wallpaper toggles live INSIDE the player panel's transport
+          row, so they scale with it in the layout editor — nothing floats on
+          the stage for them any more */}
 
       {/* fullscreen (bottom center) + creator (bottom right) */}
       <div className="pointer-events-none absolute bottom-12 left-1/2 z-40 -translate-x-1/2">
@@ -2770,14 +2449,11 @@ export default function Home() {
 
       {/* the custom lyrics — CUSTOM POSITION replaces the standard overlay
           above entirely: the panel becomes a fixed viewport rectangle owned
-          by the layout editor. TWO rectangles exist, one per CD state, and
-          this picks the live one (see the wiring block): toggling the CD
-          switches the lyrics to that state's saved spot. Rendered here, at
-          the top of the tree, NOT inside the `data-stage` box: that box
-          carries a translate transform, and a transformed ancestor becomes
-          the containing block for fixed descendants — the saved viewport
-          coordinates would land somewhere else entirely. Independent of
-          cdVisible on purpose: editing works with the CD on or off. */}
+          by the layout editor. Rendered here, at the top of the tree, NOT
+          inside the `data-stage` box: that box carries a translate transform,
+          and a transformed ancestor becomes the containing block for fixed
+          descendants — the saved viewport coordinates would land somewhere
+          else entirely. */}
       {lyrics.enabled && lyricsFramed && (allTracks.length > 0 || radio.song) && (
         <LayoutFrame box={lyricBox} onCommit={commitLyricBox} editing={isEditingLayout}>
           {lyricsPanel}
@@ -2807,28 +2483,6 @@ export default function Home() {
           unbounded
         >
           <div className="h-full w-full">{carouselWidget}</div>
-        </LayoutFrame>
-      )}
-
-      {/* the disc's own layout rectangle. The wrapper keeps the disc square as
-          the frame is resized (container units), and gives edit mode a clear
-          drag surface instead of letting the disc swallow the gesture. */}
-      {discFramed && discAssembly && (
-        <LayoutFrame box={discBox} onCommit={discSetBox} editing={isEditingLayout} seed={discSeed}>
-          <div
-            style={{
-              containerType: 'size',
-              width: '100%',
-              height: '100%',
-              display: 'grid',
-              placeItems: 'center',
-            }}
-            className={isEditingLayout ? 'pointer-events-none' : undefined}
-          >
-            <div style={{ width: 'min(100cqw, 100cqh)', height: 'min(100cqw, 100cqh)' }}>
-              {discAssembly}
-            </div>
-          </div>
         </LayoutFrame>
       )}
 
@@ -2982,7 +2636,6 @@ export default function Home() {
           them; the saved rectangles persist. */}
       {customizeOpen && (
         <CustomizePanel
-          cdVisible={cdVisible}
           editing={isEditingLayout}
           offset={chromeLayout.offsets['panel-customize']}
           onOffset={(o) => chromeLayout.setOffset('panel-customize', o)}
@@ -2996,8 +2649,6 @@ export default function Home() {
           onResetQueue={resetQueueLayout}
           musicSaved={!!musicLayout.box}
           onResetMusic={resetMusicLayout}
-          discSaved={!!discBox}
-          onResetDisc={resetDiscLayout}
           carouselSaved={!!carouselBox}
           onResetCarousel={resetCarouselLayout}
           lyricsEnabled={lyrics.enabled}

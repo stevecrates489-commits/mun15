@@ -67,11 +67,20 @@ function readBox(key: string): LayoutBox | null {
   return null
 }
 
-/* one persisted layout rectangle. `legacyKey` migrates an older single-box
-   record (the lyrics' pre-CD-split position) without a formal schema bump:
-   read once, rewritten under the new key on the next save. */
-export function useLayoutBox(key: string, legacyKey?: string) {
-  const [box, setBoxState] = useState<LayoutBox | null>(() => readBox(key) ?? (legacyKey ? readBox(legacyKey) : null))
+/* one persisted layout rectangle. `legacyKeys` migrate older records (the
+   lyrics' pre-CD-split position, and the two rectangles the CD split it into)
+   without a formal schema bump: read once, rewritten under the new key on the
+   next save. The first legacy key that holds a record wins. */
+export function useLayoutBox(key: string, ...legacyKeys: string[]) {
+  const [box, setBoxState] = useState<LayoutBox | null>(() => {
+    const direct = readBox(key)
+    if (direct) return direct
+    for (const legacyKey of legacyKeys) {
+      const legacy = readBox(legacyKey)
+      if (legacy) return legacy
+    }
+    return null
+  })
 
   const setBox = useCallback((b: LayoutBox | null) => {
     setBoxState(b)

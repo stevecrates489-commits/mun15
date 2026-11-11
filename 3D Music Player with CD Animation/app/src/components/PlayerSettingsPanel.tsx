@@ -79,6 +79,36 @@ function GlassSwitch() {
   )
 }
 
+/* The keyboard shortcuts are a PLAYER preference, not a CD one — they used to
+   live in the CD settings card and moved here when that card went with the
+   disc. Like the glass switch it owns its own state and writes straight to
+   localStorage: the key handler reads `md-shortcuts` on every keypress, so
+   nothing needs to re-render when it changes. */
+function ShortcutsSwitch() {
+  const [on, setOn] = useState(() => localStorage.getItem('md-shortcuts') !== '0')
+  useEffect(() => {
+    localStorage.setItem('md-shortcuts', on ? '1' : '0')
+  }, [on])
+  return (
+    <div className="mb-2">
+      <div className="mb-1 flex items-center justify-between">
+        <span className="font-mono text-[8px] tracking-[0.2em] text-white/35">KEYBOARD SHORTCUTS</span>
+        <span className="font-mono text-[8px] text-white/40">{on ? 'ON' : 'OFF'}</span>
+      </div>
+      <div className="flex items-center justify-between gap-2 py-1">
+        <span className="min-w-0 font-mono text-[9px] leading-tight tracking-[0.15em] text-white/75">
+          SHORTCUTS
+        </span>
+        <Toggle
+          pressed={on}
+          onToggle={() => setOn((v) => !v)}
+          label="Toggle keyboard shortcuts"
+        />
+      </div>
+    </div>
+  )
+}
+
 export default function PlayerSettingsPanel({
   settings,
   onSetting,
@@ -185,6 +215,8 @@ export default function PlayerSettingsPanel({
       </p>
 
       <GlassSwitch />
+
+      <ShortcutsSwitch />
 
       <div className="flex items-center justify-between gap-2 py-1">
         <span className="min-w-0 font-mono text-[9px] leading-tight tracking-[0.15em] text-white/75">

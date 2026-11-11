@@ -1,10 +1,21 @@
 import { useCallback, useState } from 'react'
 import { useLayoutBox } from '../layout/useLayoutBox'
 
-/* where the lyrics sit. Two positions are meaningful with the CD on the stage
-   and one with it hidden — the stage box is the only thing left to fill then */
-export type LyricsAlign = 'disc-left' | 'disc-right'
-export type LyricsMode = LyricsAlign | 'stage'
+/* Where the lyrics sit.
+   The disc is gone, so the two disc-relative positions ('disc-left' and
+   'disc-right') died with it: there is nothing beside the disc to sit beside.
+   What is left is the STAGE — the lyrics own the box the disc used to share,
+   and they are centred in it.
+
+   The saved RECTANGLE is the other half: the lyrics are movable, and they keep
+   one viewport rectangle of their own, edited in the layout editor.
+
+   The rectangle's storage key is 'md-lyrics-rect'. The older keys are read as
+   fallbacks, in the order they were most likely written:
+     'md-lyrics-box-on'  — the rectangle the CD-ON state used
+     'md-lyrics-box-off' — the rectangle the CD-OFF state used
+     'md-lyrics-box'     — the single rectangle from before the CD split
+   Whichever is found first is adopted, and the next save writes the new key. */
 
 export const LYRIC_SIZES = [20, 28, 36] as const
 export const SIZE_LABELS = ['SMALL', 'MEDIUM', 'LARGE']
@@ -22,14 +33,6 @@ export function useLyrics() {
     })
   }, [])
 
-  const [align, setAlignState] = useState<LyricsAlign>(() =>
-    localStorage.getItem('md-lyrics-align') === 'disc-right' ? 'disc-right' : 'disc-left',
-  )
-  const setAlign = useCallback((a: LyricsAlign) => {
-    setAlignState(a)
-    localStorage.setItem('md-lyrics-align', a)
-  }, [])
-
   const [size, setSizeState] = useState(() => {
     const n = Number(localStorage.getItem('md-lyrics-size'))
     return (LYRIC_SIZES as readonly number[]).includes(n) ? n : 28
@@ -39,8 +42,8 @@ export function useLyrics() {
     localStorage.setItem('md-lyrics-size', String(v))
   }, [])
 
-  /* opacity of the lyrics block — the CD has a brightness slider, and words
-     over a bright disc need the same treatment */
+  /* opacity of the lyrics block — the CD had a brightness slider, and words
+     over a bright picture need the same treatment */
   const [brightness, setBrightnessState] = useState(() => {
     const n = Number(localStorage.getItem('md-lyrics-brightness'))
     return Number.isFinite(n) && n >= 20 && n <= 160 ? n : 100
@@ -51,37 +54,27 @@ export function useLyrics() {
   }, [])
 
   /* ---- custom position (unlock layout) ----
-     While ON the panel leaves the three fixed positions and lives in its own
-     viewport rectangle, moved and resized through the layout editor. TWO
-     rectangles are kept, one per CD state (metallic on / white off) — the
-     lyrics read best in different places depending on whether the disc is
-     there to share the stage. The CD toggle switches between them live; each
-     survives reloads and on/off toggles. The legacy single-box key
-     (`md-lyrics-box`) is read as the CD-on fallback so nothing is lost. */
+     While ON the panel leaves the stage box and lives in its own viewport
+     rectangle, moved and resized through the layout editor. The rectangle
+     survives reloads. */
   const [custom, setCustomState] = useState(() => localStorage.getItem('md-lyrics-custom') === '1')
   const setCustom = useCallback((on: boolean) => {
     setCustomState(on)
     localStorage.setItem('md-lyrics-custom', on ? '1' : '0')
   }, [])
 
-  const onLayout = useLayoutBox('md-lyrics-box-on', 'md-lyrics-box')
-  const offLayout = useLayoutBox('md-lyrics-box-off')
+  const layout = useLayoutBox('md-lyrics-rect', 'md-lyrics-box-on', 'md-lyrics-box-off', 'md-lyrics-box')
 
   return {
     enabled,
     toggle,
-    align,
-    setAlign,
     size,
     setSize,
     brightness,
     setBrightness,
     custom,
     setCustom,
-    boxOn: onLayout.box,
-    setBoxOn: onLayout.setBox,
-    boxOff: offLayout.box,
-    setBoxOff: offLayout.setBox,
+    box: layout.box,
+    setBox: layout.setBox,
   }
 }
-

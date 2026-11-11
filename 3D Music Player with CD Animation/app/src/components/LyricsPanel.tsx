@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react'
 import { Clock } from 'lucide-react'
 import type { AmLyrics } from '@uimaxbai/am-lyrics'
 import '@uimaxbai/am-lyrics/am-lyrics.js'
-import type { LyricsMode } from '../features/lyrics/useLyrics'
 import {
   PROVIDER_EVENT,
   installLyricsProviderChain,
@@ -53,8 +52,7 @@ const HIDE_CHROME = `
   .no-lyrics { display: none !important; }
 `
 
-/* the stage position (CD hidden) reads as a showcase, so its lines are
-   centred; on the disc they stay left-aligned like a spooling label */
+/* the stage position reads as a showcase, so its lines are centred */
 const CENTER_CHROME = `
   .lyrics-line, .lyrics-line-container { text-align: center !important; }
 `
@@ -147,7 +145,7 @@ const WHITE_CHROME = `
     --lyplus-text-primary: #ffffff !important;
     --am-lyrics-glow-radius: 0px !important;
   }
-  /* the hard CD-off guarantee, on top of the palette: plain white glyphs and
+  /* the hard guarantee, on top of the palette: plain white glyphs and
      NOTHING else — no clipped gradient, no stroke, no shadow, no sheen. Any
      metallic artifact that survives onto the bare stage is a bug, so this
      face does not negotiate: the sheet is the last word in the cascade
@@ -170,12 +168,11 @@ const WHITE_CHROME = `
   }
 `
 
-/* ONE face: plain white — EXCEPT the metallic one a PINNED lyric wears while
-   the disc is on the stage (the rules live in Home: CD off always wins white,
-   unpinned is always white, pinned + disc = metal). The metal face recasts
-   the component's own dim→bright wipe palette in chrome — unsung syllables
-   cool silver, the sung sweep bright nickel — and adds an embossed pair of
-   shadows (light edge above, dark bevel below) for the pressed-metal grain.
+/* ONE face: plain white — EXCEPT the metallic one a PINNED lyric wears. The
+   metal face recasts the component's own dim→bright wipe palette in chrome —
+   unsung syllables cool silver, the sung sweep bright nickel — and adds an
+   embossed pair of shadows (light edge above, dark bevel below) for the
+   pressed-metal grain.
 
    DELIBERATELY no `background-clip: text` gradient: the first metal face
    used one, and in WebView2 (the Tauri runtime) the clipped-gradient glyph
@@ -232,10 +229,8 @@ interface Props {
      for word-by-word interpolation) */
   getTime: () => number
   onSeek: (seconds: number) => void
-  /* base font size in px — the lyrics sit on the disc, so the user tunes it */
+  /* base font size in px — the user tunes it */
   size: number
-  /* which of the three positions this instance occupies */
-  mode: LyricsMode
   /* 20-160, applied as a CSS filter so bright artwork can be read through */
   brightness: number
   /* seconds added to the playhead, to correct a mis-timed source */
@@ -244,9 +239,8 @@ interface Props {
      for a locally pinned lyric, and for the radio, whose lyrics come from
      the song clock's own source */
   ttml?: string | null
-  /* the metallic face — a PINNED lyric while the disc is on the stage. Home
-     owns the rule (CD off and unpinned both force white); this only picks
-     the sheet. */
+  /* the metallic face — a PINNED lyric. Home owns the rule (an unpinned
+     lyric is always white); this only picks the sheet. */
   metal?: boolean
   /* filled with the imperative controls the settings panel and editor drive */
   apiRef: React.RefObject<LyricsApi | null>
@@ -280,7 +274,6 @@ export default function LyricsPanel({
   getTime,
   onSeek,
   size,
-  mode,
   brightness,
   offset,
   ttml,
@@ -290,8 +283,8 @@ export default function LyricsPanel({
   const hostRef = useRef<HTMLDivElement>(null)
   const elRef = useRef<AmLyrics | null>(null)
   /* true while the user has taken the wheel away from autoscroll — drives the
-     3-second return bar. Works in every position (on disc, beside disc, stage)
-     because it listens on the panel itself, not on the layout. */
+     3-second return bar. It listens on the panel itself, not on the layout,
+     so it works wherever the panel is placed. */
   const [scrolled, setScrolled] = useState(false)
   const resumeRef = useRef<() => void>(() => {})
   /* Which provider is serving the words right now. The chain runs inside the
@@ -354,7 +347,7 @@ export default function LyricsPanel({
   /* The element's identity: everything that makes it be rebuilt. A rebuilt
      element is a fresh fetch, so the provider the ref holds stops being true
      the moment the rebuild happens — the ref is reset in the mount effect. */
-  const buildKey = `${songKey}\u0000${ms ?? ''}\u0000${mode}\u0000${live ? 'live' : ''}`
+  const buildKey = `${songKey}\u0000${ms ?? ''}\u0000${live ? 'live' : ''}`
 
   useEffect(() => {
     const host = hostRef.current
@@ -501,7 +494,7 @@ export default function LyricsPanel({
       apiRef.current = null
       el.remove()
     }
-  }, [title, effArtist, ms, ttml, apiRef, mode, live, buildKey])
+  }, [title, effArtist, ms, ttml, apiRef, live, buildKey])
 
   /* the app's sheet — installed after every build. A dedicated effect, so
      re-installing it never rebuilds the element (a rebuild would refetch the
@@ -511,9 +504,8 @@ export default function LyricsPanel({
      rule applies whenever it appears.
 
      One sheet is remembered so the next adopt can drop it: a new one is
-     built whenever the song, the position or the panel's own chrome changes,
-     and a leftover sheet would keep its `!important` palette in the
-     cascade. */
+     built whenever the song or the panel's own chrome changes, and a leftover
+     sheet would keep its `!important` palette in the cascade. */
   const ownedSheetsRef = useRef<CSSStyleSheet[]>([])
   useEffect(() => {
     const sheet = new CSSStyleSheet()
@@ -522,7 +514,7 @@ export default function LyricsPanel({
         TEXT_CHROME +
         MOTION_CHROME +
         BG_HIDE_CHROME +
-        (mode === 'stage' ? CENTER_CHROME : '') +
+        CENTER_CHROME +
         (metal ? METAL_CHROME : WHITE_CHROME),
     )
     const raf = requestAnimationFrame(() => {
@@ -533,7 +525,7 @@ export default function LyricsPanel({
       ownedSheetsRef.current = [sheet]
     })
     return () => cancelAnimationFrame(raf)
-  }, [title, artist, ms, ttml, mode, live, metal])
+  }, [title, artist, ms, ttml, live, metal])
 
   /* Playhead. One sync while paused, a frame loop while playing — the same
      pattern the component's own README recommends. Never React state: a tick
@@ -669,7 +661,7 @@ export default function LyricsPanel({
 
   const vars = {
     '--lyplus-font-size-base': `${size}px`,
-    '--am-lyrics-line-height': mode === 'stage' ? '1.16' : '1.22',
+    '--am-lyrics-line-height': '1.16',
     '--am-lyrics-line-spacing': `${Math.round(size * 0.55)}px`,
     '--am-lyrics-background-vocal-font-size': '0.7em',
     '--am-lyrics-inactive-scale': '0.97',

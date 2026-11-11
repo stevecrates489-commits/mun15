@@ -34,8 +34,6 @@ export default function MusicControlPanel({
   onRadioHoldEnd,
   onRadioHoldLeave,
   onRadioClick,
-  cdSettingsOpen,
-  onToggleCdSettings,
   wallSettingsOpen,
   onToggleWallSettings,
 }: {
@@ -63,8 +61,6 @@ export default function MusicControlPanel({
   onRadioHoldLeave: () => void
   /** plain click on the radio button (edit mode's hold-free path) */
   onRadioClick: () => void
-  cdSettingsOpen: boolean
-  onToggleCdSettings: () => void
   wallSettingsOpen: boolean
   onToggleWallSettings: () => void
 }) {
@@ -103,8 +99,6 @@ export default function MusicControlPanel({
         onRadioHoldEnd={onRadioHoldEnd}
         onRadioHoldLeave={onRadioHoldLeave}
         onRadioClick={onRadioClick}
-        cdSettingsOpen={cdSettingsOpen}
-        onToggleCdSettings={onToggleCdSettings}
         wallSettingsOpen={wallSettingsOpen}
         onToggleWallSettings={onToggleWallSettings}
       />
