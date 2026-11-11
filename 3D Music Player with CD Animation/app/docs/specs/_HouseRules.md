@@ -2,9 +2,19 @@
 
 > **Applies to:** every panel spec in `app/docs/specs/`.
 >
-> Read this first. It is the vocabulary the six specs are written in, and the
+> Read this first. It is the vocabulary the specs are written in, and the
 > conventions a rebuilt panel must keep to look and behave like the rest of
 > the app.
+>
+> **Two exceptions** have their own geometry and their own spec sections, and
+> both are stated in full there:
+>
+> - **The QueuePanel** (`QueuePanel.SPEC.md`) is a full-height **edge panel**
+>   with its own CSS file, its own liquid-glass lens and its own z-index band
+>   (`80`). It does not use the class recipe below.
+> - **The ColorPicker / GradientPicker** (`ColorPicker.SPEC.md`,
+>   `GradientPicker.SPEC.md`) are a **header popover**, not a corner card. The
+>   card has its own `pop-in` entrance and no exit animation.
 
 ---
 

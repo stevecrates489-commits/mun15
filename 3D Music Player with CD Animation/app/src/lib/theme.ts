@@ -6,7 +6,12 @@
    localStorage. Rather than stranding them on a theme that no longer
    exists, that name is MIGRATED to the moving gradient, which is what took
    its place. Both the boot restore and the live theme state read through
-   this one function, so the two can never disagree. */
+   this one function, so the two can never disagree.
+
+   'aurora' — the moving gradient — is still a valid, still-rendered theme,
+   but its header button was removed: it can no longer be PICKED. A profile
+   that already had it keeps its backdrop. Nothing here changes that: the
+   theme id stays in the type, and the migration still points at it. */
 
 export type Theme = 'black' | 'aurora' | 'color' | 'custom'
 

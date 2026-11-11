@@ -1941,6 +1941,14 @@ export default function Home() {
               }
             />
             </DraggableSurface>
+            {/* the theme swatches. The registry (THEMES) holds every theme
+                that owns a swatch here; 'black' is deliberately excluded —
+                the colour picker paints the wall, so a flat-black button
+                would only ever be the lesser of the two. The registry is
+                currently empty of visible entries: the "Theme: moving
+                gradient" (aurora) swatch was removed, so the moving-gradient
+                theme can no longer be picked from the header. The theme
+                itself still renders for a profile that already chose it. */}
             {THEMES.filter((t) => t.id !== 'black').map((t) => (
               <DraggableSurface
                 key={t.id}
@@ -1955,7 +1963,7 @@ export default function Home() {
                   onClick={() => wall.setTheme(t.id)}
                   className={`h-4 w-4 rounded-full transition-all duration-150 ${
                     wall.theme === t.id ? 'ring-2 ring-white/60 ring-offset-2 ring-offset-black' : 'ring-1 ring-white/20 hover:ring-white/45'
-                  } ${t.aurora ? 'animate-aurora' : ''}`}
+                  }`}
                   style={t.swatch}
                 />
               </DraggableSurface>

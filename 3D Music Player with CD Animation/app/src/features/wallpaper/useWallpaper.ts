@@ -32,12 +32,24 @@ export const AURORA_BG =
 /* the brighter sweep that rides on top of the bloom */
 export const AURORA_BAND_BG =
   'linear-gradient(112deg, transparent 8%, rgba(56,189,248,0.20) 26%, rgba(168,85,247,0.26) 48%, rgba(236,72,153,0.18) 68%, transparent 90%)'
-export const THEMES: { id: Theme; label: string; swatch: React.CSSProperties; aurora?: boolean }[] = [
+/* The theme registry.
+   It used to carry a second entry — 'aurora', labelled "Theme: moving
+   gradient" — whose swatch was the live gradient circle in the header's
+   theme cluster. That swatch is GONE: the moving-gradient theme is no
+   longer pickable from the header.
+
+   What survives is the theme itself. 'aurora' is still a valid Theme, the
+   full-page bloom backdrop still renders for it, and a profile that already
+   saved it (or an old 'gradient' name, which lib/theme.ts migrates to
+   'aurora') keeps its backdrop. Only the button that selected it was
+   removed — the wallpaper behind the player must not change under someone
+   who already chose it.
+
+   'black' stays here as the boot fallback. It has no swatch button on
+   purpose: the colour picker in the header paints the wall, so a flat
+   black button would only ever be the lesser of the two. */
+export const THEMES: { id: Theme; label: string; swatch: React.CSSProperties }[] = [
   { id: 'black', label: 'Theme: black', swatch: { background: '#000' } },
-  /* the flat "Theme: gradient" preset is gone: the colour picker in the
-     header's top-left now paints a real two-stop gradient, so a second
-     gradient button would only ever be the lesser of the two */
-  { id: 'aurora', label: 'Theme: moving gradient', swatch: { background: 'linear-gradient(135deg, #6722D6, #0EA5E9 45%, #EC4893 85%)', backgroundSize: '200% 200%' }, aurora: true },
 ]
 
 export function useWallpaper({ setImportHint }: { setImportHint: (v: string | null) => void }) {

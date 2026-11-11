@@ -350,7 +350,7 @@ A wallpaper extension paints **at its own slot** by adding a layer with the `bg-
 - pause when `theme !== 'custom'` or when the host reports the window hidden (`md-wall-pausehidden`);
 - expose its settings through the wallpaper panel (`slot: "wallpaper-picker"`) rather than its own separate panel.
 
-Theme ids today: `black`, `aurora`, `color`, `custom`. New themes register in `THEMES` with an id, label and swatch, and must render under the same layer rules.
+Theme ids today: `black`, `aurora`, `color`, `custom`. New themes register in `THEMES` with an id, label and swatch, and must render under the same layer rules. `aurora` (the moving gradient) is still a valid, still-rendered theme but its header swatch was removed — it can no longer be picked, only inherited from an existing profile.
 
 ### 4.4 UI API
 

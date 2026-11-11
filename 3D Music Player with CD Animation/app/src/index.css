@@ -203,14 +203,6 @@ body {
 }
 .animate-title-scroll { animation: title-scroll 14s linear infinite; }
 
-/* moving gradient theme */
-@keyframes aurora {
-  0% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
-  100% { background-position: 0% 50%; }
-}
-.animate-aurora { animation: aurora 18s ease-in-out infinite; }
-
 /* the live-visuals circle in the header — a quiet turn of hues while one of
    the live visuals is behind the player */
 @keyframes liveviz {

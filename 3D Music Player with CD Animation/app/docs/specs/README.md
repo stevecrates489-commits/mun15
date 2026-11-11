@@ -20,6 +20,10 @@ verification harnesses in `3D Music Player with CD Animation/.verify/`.
 | 4 | [`PlayerSettings.SPEC.md`](PlayerSettings.SPEC.md) | Crossfade and its length, volume normalisation, the glass/solid switch, the keyboard-shortcuts switch, accent-from-art. |
 | 5 | [`CustomizePanel.SPEC.md`](CustomizePanel.SPEC.md) | The layout hub: start the edit session, the lyrics custom-position toggle, and the per-region resets. |
 | 6 | [`ExtensionsPanel.SPEC.md`](ExtensionsPanel.SPEC.md) | The extension hub — one row per extension, and how to add a new one. |
+| 7 | [`ColorPicker.SPEC.md`](ColorPicker.SPEC.md) | The **wallpaper colour** half of the header's picker card: the mode toggle, the live preview, the SV square, the hue strip, the alpha strip and the hex field. |
+| 8 | [`GradientPicker.SPEC.md`](GradientPicker.SPEC.md) | The **wallpaper gradient** half of the same card: the two-stop model, the A/B stop chips, the swap button, the angle slider and the saved-preset library. |
+| 9 | [`VisualizerPanel.SPEC.md`](VisualizerPanel.SPEC.md) | The **live visual** picker and tuner: the VoltViz registry grid, the per-style tuning sliders, the visual's own settings card, and HIDE UI. |
+| 10 | [`QueuePanel.SPEC.md`](QueuePanel.SPEC.md) | The **unified queue / playlists** panel: both tabs, the queue's rotation around the playhead, the pointer-event drag-to-reorder, the glass lens, the auto-hide, and the inline track editor. |
 
 ---
 
@@ -34,10 +38,20 @@ verification harnesses in `3D Music Player with CD Animation/.verify/`.
 | PlayerSettings | `PlayerSettingsPanel.tsx` | `app/src/components/` |
 | CustomizePanel | `CustomizePanel.tsx` | `app/src/components/` |
 | ExtensionsPanel | `ExtensionPanel.tsx` | `app/src/components/` |
+| ColorPicker | `ColorPicker.tsx` | `app/src/components/` |
+| GradientPicker | `ColorPicker.tsx` (the gradient half of the same card) | `app/src/components/` |
+| VisualizerPanel | `VisualizerPanel.tsx` | `app/src/components/` |
+| QueuePanel | `QueuePanel.tsx` + `QueuePanel.css` | `app/src/components/` |
 
 Three of these file names are historical — the *Wallpaper*, *PlayerSettings*
 and *Extensions* panels are all `…SettingsPanel` / `ExtensionPanel` on disk.
 The spec names are the ones used throughout the docs.
+
+Two more are *split by mode, not by file*: **ColorPicker** and
+**GradientPicker** are two halves of **one** card — `ColorPicker.tsx` — which
+is in `SOLID` mode or `GRADIENT` mode. They are specified separately because
+they are separate jobs, but a rebuild must keep them in one card or recreate
+the mode toggle that moves between them.
 
 ---
 
@@ -45,12 +59,19 @@ The spec names are the ones used throughout the docs.
 
 **1. The panel is a controlled component.** It owns no state beyond what the
 brief explicitly gives it (the lyrics' `scrolled` flag, the wallpaper's
-flyout and arm flags, the radio's tab and query). Everything else arrives as
-a prop and leaves through a callback. A rebuilt panel that keeps its own copy
-of a prop will desync from the app.
+flyout and arm flags, the radio's tab and query, the colour picker's stop
+and preset draft). Everything else arrives as a prop and leaves through a
+callback. A rebuilt panel that keeps its own copy of a prop will desync from
+the app.
 
 **2. The house rules are not negotiable.** The class recipe, the two-stage
 close protocol, the hairline scrollbar, the mono uppercase micro-labels and
 the accessibility attributes are what make a panel look and behave like the
 rest of this app. `_HouseRules.md` §11 lists the specific rules that have
 already cost a bug here.
+
+**3. The QueuePanel is the exception to the class recipe.** It is a
+full-height edge panel with its own CSS file and its own liquid-glass lens,
+not a small corner card. Read `QueuePanel.SPEC.md` in full before touching
+it — it carries its own geometry, its own z-index band (`80`) and its own
+harness contract.
