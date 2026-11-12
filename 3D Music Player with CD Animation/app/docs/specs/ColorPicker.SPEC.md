@@ -66,7 +66,7 @@ export type Paint =
 
 `WallGradient` is covered in [`GradientPicker.SPEC.md`](GradientPicker.SPEC.md) §2.
 
-### 2.2 How Home mounts it (`Home.tsx:2017-2041`)
+### 2.2 How Home mounts it (`Home.tsx:2025-2049`)
 
 ```tsx
 {colorPickerOpen && (
@@ -147,9 +147,9 @@ or the hex field will fight the user.
 
 | Parent state | Where | Notes |
 | --- | --- | --- |
-| `wallPaint: Paint` | `useWallpaper.ts:57-83` | Initialised from `localStorage['md-wall-paint']` via `parsePaint`; falls back to the legacy `localStorage['md-wall-color']` (an old bare `Hsv` JSON) and then to `{ kind:'solid', color: DEFAULT_WALL_COLOR }`. |
+| `wallPaint: Paint` | `useWallpaper.ts:69-83` | Initialised from `localStorage['md-wall-paint']` via `parsePaint`; falls back to the legacy `localStorage['md-wall-color']` (an old bare `Hsv` JSON) and then to `{ kind:'solid', color: DEFAULT_WALL_COLOR }`. |
 | `hasWallPaint: boolean` | `useWallpaper.ts:86-92` | `true` if either `md-wall-paint` or `md-wall-color` exists in storage. Set `true` by `setWallPaint`. |
-| `theme: Theme` | `useWallpaper.ts:45-51` | `setWallPaint` forces `theme = 'color'` (and writes `md-theme`). The wallpaper layer only renders when `theme === 'color'` (`Home.tsx:1783-1785`). |
+| `theme: Theme` | `useWallpaper.ts:57-63` | `setWallPaint` forces `theme = 'color'` (and writes `md-theme`). The wallpaper layer only renders when `theme === 'color'` (`Home.tsx:1783-1785`). |
 | `colorPickerOpen: boolean` | `Home.tsx:158` | Mount/unmount of the whole card. |
 
 ---
@@ -224,8 +224,8 @@ onChange({ kind: 'solid', color: grad ? grad.from : (solid as Hsv) })
 - `role="dialog"`, `aria-label="Wallpaper colour"`. **No `aria-modal`.**
 - Hard-coded colours: background `#0c0c11` at 95 % (`bg-[#0c0c11]/95`), border `white/12`, shadow `rgba(0,0,0,0.75)`.
 - `pop-in` = `div.pop-in { animation: pop-in 180ms ease-out both !important; }`
-  (`index.css:409-411`), keyframes `opacity 0 / translateY(6px)` → `opacity 1 / none`
-  (`index.css:316-319`).
+  (`index.css:401-403`), keyframes `opacity 0 / translateY(6px)` → `opacity 1 / none`
+  (`index.css:308-311`).
 - **No `settings-panel`, no `fx-blur`, no `thin-scroll`, no
   `data-liquid-ignore`** — this card does **not** follow the house panel
   recipe in `_HouseRules.md`. It is a header popover, not a corner panel.
@@ -398,7 +398,7 @@ constant is `DEFAULT_WALL_COLOR`.
 
 Sibling header swatches (in `useWallpaper.ts`, **not** part of this card):
 `black` (`#000`). The old flat `gradient` theme was removed and is migrated to
-`aurora` (`lib/theme.ts:14-16`); the `aurora` ("Theme: moving gradient")
+`aurora` (`lib/theme.ts:19-21`); the `aurora` ("Theme: moving gradient")
 swatch was removed from the header entirely and the theme can no longer be
 picked — only inherited from an existing profile.
 
@@ -426,7 +426,7 @@ picked — only inherited from an existing profile.
   **no exit animation** — `onClose` unmounts immediately. The only motion is
   the `pop-in` entrance.
 - **Click-away**: a `fixed inset-0 z-[94]` `<button aria-label="Close colour
-  picker">` behind the card (`Home.tsx:2021-2025`). Its handler is
+  picker">` behind the card (`Home.tsx:2029-2033`). Its handler is
   `() => setColorPickerOpen(false)` — it **bypasses the card's `close()`**, so
   it does *not* run `commitDraft()`. In practice the pending hex still lands,
   because mousedown on the backdrop blurs the hex field and `onBlur →
@@ -555,7 +555,7 @@ overscroll-contain`.
 | Key | Written by | Shape |
 | --- | --- | --- |
 | `md-wall-paint` | `useWallpaper.setWallPaint` (`useWallpaper.ts:98`) | `JSON.stringify(Paint)` — `{"kind":"solid","color":{h,s,v,a}}` or `{"kind":"gradient","gradient":{"from":{...},"to":{...},"angle":n}}` |
-| `md-wall-color` | legacy, **read only** now (`useWallpaper.ts:73`) | Old bare `Hsv` JSON, migrated to a solid paint on first load |
+| `md-wall-color` | legacy, **read only** now (`useWallpaper.ts:74`) | Old bare `Hsv` JSON, migrated to a solid paint on first load |
 | `md-wall-gradient-presets` | `ColorPicker.writePresets` | JSON array of `{id,name,gradient:{from,to,angle}}`, max 40 |
 | `md-theme` | `useWallpaper` | `'black' \| 'aurora' \| 'color' \| 'custom'`; forced to `'color'` by `setWallPaint` and `applyWallPaint` |
 | `md-chrome-offsets` | `useChromeLayout` | Holds the picker's drag offset under the key `panel-color-picker` |
@@ -602,7 +602,7 @@ overscroll-contain`.
     adopts `_HouseRules.md`'s glass recipe wholesale it will change the look
     (the card is `bg-[#0c0c11]/95`, not `bg-black/85`).
 12. **The header swatch is the trigger and must stay clickable** —
-    `Home.tsx:1901-1929` — and its first click applies the saved paint
+    `Home.tsx:1901-1930` — and its first click applies the saved paint
     (`applyWallPaint`) *before* toggling the picker open, so opening the
     picker never counts as "choosing a colour". The wall layer only renders
     while `theme === 'color'` (`Home.tsx:1783-1785`), and `setWallPaint`

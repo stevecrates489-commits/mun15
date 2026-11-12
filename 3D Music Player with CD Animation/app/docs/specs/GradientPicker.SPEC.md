@@ -213,7 +213,7 @@ rendered **only when `isGradient && grad`** (`:279-441`).
 - Label `ANGLE`; readout `NNN°` (rounded to the nearest degree).
 - Range: `min=0 max=360 step=1`, `aria-label="Gradient angle"`, class
   `chrome-range mb-2.5 w-full`.
-- `.chrome-range` (`index.css:943-968`): 4 px tall, 2 px radius, track
+- `.chrome-range` (`index.css:935-960`): 4 px tall, 2 px radius, track
   `linear-gradient(90deg,#e8ecf1,#8d959f)`, 14 px round thumb
   `radial-gradient(circle at 35% 30%, #fff, #aab 60%, #556)` + glow
   `0 0 8px rgba(255,255,255,0.6)`.

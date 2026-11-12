@@ -169,7 +169,7 @@ export const DOWNLOADS_FOLDER_NAME = 'Downloads Online'
   )
 ```
 
-Mount site (`Home.tsx:2731-2737`):
+Mount site (`Home.tsx:2739-2745`):
 
 ```tsx
       {queueFramed ? (
@@ -1522,7 +1522,7 @@ drag:
 | Auto-scroll | 36 px band, 10 px/frame | 44 px band, speed scaled by depth, `max(±11, over*0.25)` |
 | Commit | `onReorderQueue` / `onReorderFolderTracks` | `onAddToPlaylistRef.current(chip, trackId)` or `onReorderRef.current(from, hover)` |
 | Click suppression | none needed (the grip is the trigger) | a capture-phase click swallow within 250 ms of a drop |
-| Body class | — | `document.body.classList.add('row-dragging')` → `user-select: none; cursor: grabbing` (`src/index.css:844-848`) |
+| Body class | — | `document.body.classList.add('row-dragging')` → `user-select: none; cursor: grabbing` (`src/index.css:836-840`) |
 
 The QueuePanel does **not** have a `data-row-index`, a ghost, or a marker. If
 the rebuild is expected to match `PlaylistPanel`'s feel, that is new work; if

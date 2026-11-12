@@ -84,7 +84,7 @@ export interface VisualizerSettings {
 }
 ```
 
-### 2.2 How Home mounts it (`Home.tsx:2459-2473`)
+### 2.2 How Home mounts it (`Home.tsx:2467-2481`)
 
 ```tsx
 {visualizerOpen && (
@@ -116,7 +116,7 @@ export interface VisualizerSettings {
 ### 2.3 The only trigger
 
 The panel is opened by the **visualiser circle in the header's left cluster**
-(`Home.tsx:1935-1968`, the `hdr-visualizer` surface):
+(`Home.tsx:1935-1969`, the `hdr-visualizer` surface):
 
 ```tsx
 <button
